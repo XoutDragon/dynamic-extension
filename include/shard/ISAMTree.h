@@ -119,6 +119,7 @@ namespace de
       std::vector<size_t> records_per_shard;
 
       m_id = generate_uuid();
+
       for (ISAMTree *shard : shards)
       {
         m_reccnt += shard->get_record_count();
@@ -130,21 +131,39 @@ namespace de
       std::string shard_filename = get_filename();
 
       m_isam_fd = open(shard_filename.c_str(), O_CREAT | O_RDWR, 0644);
+
       if (m_isam_fd < 0)
-      {
         throw std::system_error(errno, std::generic_category(), "failed to create ISAM file");
-      }
 
       external_merge_sort(run_fds, true, records_per_shard);
 
       if (m_reccnt > 0)
-      {
         build_internal_levels(1, m_last_data_page);
-      }
 
       m_internal_node_cnt = m_root_page - m_last_data_page;
 
       write_header();
+    }
+
+    ISAMTree(std::string filename)
+        : m_bf(nullptr), m_root_page(0), m_reccnt(0),
+          m_tombstone_cnt(0), m_internal_node_cnt(0), m_deleted_cnt(0),
+          m_alloc_size(0), m_last_data_page(0), m_isam_fd(-1)
+    {
+      int m_isam_fd = open(filename.c_str(), O_RDONLY);
+      if (m_isam_fd < 0)
+        throw std::system_error(errno, std::generic_category(), "failed to open ISAM file");
+
+      ISAMTreeHeader header;
+
+      if (pread(fd, &header, sizeof(ISAMTreeHeader), 0) < sizeof(ISAMTreeHeader))
+        throw std::system_error(errno, std::generic_category(), "failed to read ISAM Header from ISAM file");
+
+      m_id = uuids::uuid(header.id);
+      m_root_page = header.root_page;
+      m_last_data_page = header.last_data_page;
+      m_reccnt = header.record_cnt;
+      m_internal_node_cnt = header.internal_node_cnt;
     }
 
     ~ISAMTree()
