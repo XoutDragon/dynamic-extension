@@ -13,6 +13,10 @@
 #pragma once
 
 #include <cassert>
+#include <fcntl.h>
+#include <queue>
+#include <string>
+#include <sys/stat.h>
 #include <vector>
 
 #include "framework/ShardRequirements.h"
@@ -20,238 +24,565 @@
 #include "psu-ds/BloomFilter.h"
 #include "util/SortedMerge.h"
 #include "util/bf_config.h"
+#include "uuid.h"
 
 using psudb::BloomFilter;
 using psudb::byte;
 using psudb::CACHELINE_SIZE;
 
-namespace de {
+namespace de
+{
 
-template <KVPInterface R> class ISAMTree {
-private:
-  typedef decltype(R::key) K;
-  typedef decltype(R::value) V;
+  template <KVPInterface R>
+  class ISAMTree
+  {
+  private:
+    typedef decltype(R::key) K;
+    typedef decltype(R::value) V;
+    typedef uint32_t PageNum;
 
-  constexpr static size_t NODE_SZ = 256;
-  constexpr static size_t INTERNAL_FANOUT =
-      NODE_SZ / (sizeof(K) + sizeof(byte *));
+    constexpr static size_t NODE_SZ = 256;
+    constexpr static size_t INTERNAL_FANOUT =
+        NODE_SZ / (sizeof(K) + sizeof(PageNum));
 
-  struct InternalNode {
-    K keys[INTERNAL_FANOUT];
-    byte *child[INTERNAL_FANOUT];
-  };
+    struct ISAMTreeHeader
+    {
+      std::array<uint8_t, 16> id;
+      PageNum root_page;
+      PageNum last_data_page;
+      size_t reccnt;
+      size_t internal_node_cnt;
+    };
 
-  static_assert(sizeof(InternalNode) == NODE_SZ, "node size does not match");
+    struct InternalNode
+    {
+      K keys[INTERNAL_FANOUT];
+      PageNum child[INTERNAL_FANOUT];
+    };
 
-  constexpr static size_t LEAF_FANOUT = NODE_SZ / sizeof(R);
+    struct HeapNode
+    {
+      Wrapped<R> record;
+      size_t file_idx;
 
-public:
-  typedef R RECORD;
+      bool operator>(const HeapNode &rhs) const
+      {
+        return record.rec.key > rhs.record.rec.key;
+      }
+    };
 
-  ISAMTree(BufferView<R> buffer)
-      : m_bf(nullptr), m_isam_nodes(nullptr), m_root(nullptr), m_reccnt(0),
-        m_tombstone_cnt(0), m_internal_node_cnt(0), m_deleted_cnt(0),
-        m_alloc_size(0) {
-    m_alloc_size = psudb::sf_aligned_alloc(
-        CACHELINE_SIZE, buffer.get_record_count() * sizeof(Wrapped<R>),
-        (byte **)&m_data);
+    static_assert(sizeof(InternalNode) == NODE_SZ, "node size does not match");
 
-    auto res = sorted_array_from_bufferview(std::move(buffer), m_data, m_bf);
-    m_reccnt = res.record_count;
-    m_tombstone_cnt = res.tombstone_count;
+    constexpr static size_t LEAF_FANOUT = NODE_SZ / sizeof(Wrapped<R>);
 
-    if (m_reccnt > 0) {
-      build_internal_levels();
+  public:
+    typedef R RECORD;
+
+    ISAMTree(BufferView<R> buffer)
+        : m_bf(nullptr), m_root_page(0), m_reccnt(0),
+          m_tombstone_cnt(0), m_internal_node_cnt(0), m_deleted_cnt(0),
+          m_alloc_size(0), m_last_data_page(0), m_isam_fd(-1)
+    {
+      m_id = generate_uuid();
+      m_reccnt = buffer.get_record_count();
+      m_tombstone_cnt = buffer.get_tombstone_count();
+
+      std::string shard_filename = get_filename();
+
+      m_isam_fd = open(shard_filename.c_str(), O_CREAT | O_RDWR, 0644);
+      if (m_isam_fd < 0)
+      {
+        throw std::system_error(errno, std::generic_category(), "failed to create ISAM file");
+      }
+
+      std::vector<int> run_fds = create_sorted_runs(std::move(buffer));
+      external_merge_sort(run_fds);
+      cleanup_sorted_runs(run_fds);
+
+      if (m_reccnt > 0)
+      {
+        build_internal_levels(1, m_last_data_page);
+      }
+
+      m_internal_node_cnt = m_root_page - m_last_data_page;
+
+      write_header();
     }
-  }
 
-  ISAMTree(std::vector<ISAMTree *> const &shards)
-      : m_bf(nullptr), m_isam_nodes(nullptr), m_root(nullptr), m_reccnt(0),
-        m_tombstone_cnt(0), m_internal_node_cnt(0), m_deleted_cnt(0),
-        m_alloc_size(0) {
-    size_t attemp_reccnt = 0;
-    size_t tombstone_count = 0;
-    auto cursors =
-        build_cursor_vec<R, ISAMTree>(shards, &attemp_reccnt, &tombstone_count);
+    ISAMTree(std::vector<ISAMTree *> const &shards)
+        : m_bf(nullptr), m_root_page(0), m_reccnt(0),
+          m_tombstone_cnt(0), m_internal_node_cnt(0), m_deleted_cnt(0),
+          m_alloc_size(0), m_last_data_page(0), m_isam_fd(-1)
+    {
 
-    m_bf = nullptr;
-    m_alloc_size = psudb::sf_aligned_alloc(
-        CACHELINE_SIZE, attemp_reccnt * sizeof(Wrapped<R>), (byte **)&m_data);
+      std::vector<int> run_fds;
+      std::vector<size_t> records_per_shard;
 
-    auto res = sorted_array_merge<R>(cursors, m_data, m_bf);
-    m_reccnt = res.record_count;
-    m_tombstone_cnt = res.tombstone_count;
+      m_id = generate_uuid();
+      for (ISAMTree *shard : shards)
+      {
+        m_reccnt += shard->get_record_count();
+        m_tombstone_cnt += shard->get_tombstone_count();
+        run_fds.push_back(shard->m_isam_fd);
+        records_per_shard.push_back(shard->get_record_count());
+      }
 
-    if (m_reccnt > 0) {
-      build_internal_levels();
+      std::string shard_filename = get_filename();
+
+      m_isam_fd = open(shard_filename.c_str(), O_CREAT | O_RDWR, 0644);
+      if (m_isam_fd < 0)
+      {
+        throw std::system_error(errno, std::generic_category(), "failed to create ISAM file");
+      }
+
+      external_merge_sort(run_fds, true, records_per_shard);
+
+      if (m_reccnt > 0)
+      {
+        build_internal_levels(1, m_last_data_page);
+      }
+
+      m_internal_node_cnt = m_root_page - m_last_data_page;
+
+      write_header();
     }
-  }
 
-  ~ISAMTree() {
-    free(m_data);
-    free(m_isam_nodes);
-    delete m_bf;
-  }
+    ~ISAMTree()
+    {
+      remove(get_filename().c_str());
+      close(m_isam_fd);
+      delete m_bf;
+    }
 
-  Wrapped<R> *point_lookup(const R &rec, bool filter = false) {
-    if (filter && !m_bf->lookup(rec)) {
+    uuids::uuid get_id() const { return m_id; }
+
+    std::string get_filename() const
+    {
+      return "isam_shard_" + uuids::to_string(m_id) + ".dat";
+    }
+
+    Wrapped<R> *point_lookup(const R &rec, std::byte *buffer, bool filter = false)
+    {
+      if (filter && !m_bf->lookup(rec))
+        return nullptr;
+
+      size_t offset = get_lower_bound(rec.key);
+
+      if (offset >= (m_last_data_page + 1) * NODE_SZ)
+        return nullptr;
+
+      PageNum page = offset / NODE_SZ;
+      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
+
+      if (pread(m_isam_fd, buffer, NODE_SZ, page * NODE_SZ) < 0)
+      {
+        free(buffer);
+        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in point_lookup");
+      }
+
+      size_t page_offset = (offset % NODE_SZ) / sizeof(Wrapped<R>);
+      Wrapped<R> *records = reinterpret_cast<Wrapped<R> *>(buffer);
+
+      if (records[page_offset].rec == rec)
+      {
+        Wrapped<R> *result = new Wrapped<R>(records[page_offset]);
+        return result;
+      }
+
+      free(buffer);
       return nullptr;
     }
 
-    size_t idx = get_lower_bound(rec.key);
-    if (idx >= m_reccnt) {
-      return nullptr;
-    }
+    size_t get_record_count() const { return m_reccnt; }
 
-    while (idx < m_reccnt && m_data[idx].rec < rec)
-      ++idx;
+    size_t get_tombstone_count() const { return m_tombstone_cnt; }
 
-    if (m_data[idx].rec == rec) {
-      return m_data + idx;
-    }
+    size_t get_memory_usage() const { return m_internal_node_cnt * NODE_SZ; }
 
-    return nullptr;
-  }
+    size_t get_aux_memory_usage() const { return (m_bf) ? m_bf->memory_usage() : 0; }
 
-  Wrapped<R> *get_data() const { return m_data; }
+    /* SortedShardInterface methods */
+    ssize_t get_lower_bound(const K &key) const
+    {
+      PageNum now = m_root_page;
+      std::byte *buffer = nullptr;
+      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
 
-  size_t get_record_count() const { return m_reccnt; }
-
-  size_t get_tombstone_count() const { return m_tombstone_cnt; }
-
-  size_t get_memory_usage() const { return m_internal_node_cnt * NODE_SZ; }
-
-  size_t get_aux_memory_usage() const { return (m_bf) ? m_bf->memory_usage() : 0; }
-
-  /* SortedShardInterface methods */
-  size_t get_lower_bound(const K &key) const {
-    const InternalNode *now = m_root;
-    while (!is_leaf(reinterpret_cast<const byte *>(now))) {
-      const InternalNode *next = nullptr;
-      for (size_t i = 0; i < INTERNAL_FANOUT - 1; ++i) {
-        if (now->child[i + 1] == nullptr || key <= now->keys[i]) {
-          next = reinterpret_cast<InternalNode *>(now->child[i]);
-          break;
+      while (!is_leaf(now))
+      {
+        if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
+        {
+          free(buffer);
+          throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_lower_bound");
         }
-      }
 
-      now = next ? next
-                 : reinterpret_cast<const InternalNode *>(
-                       now->child[INTERNAL_FANOUT - 1]);
-    }
+        InternalNode *node = (InternalNode *)buffer;
+        PageNum next = node->child[0];
 
-    const Wrapped<R> *pos = reinterpret_cast<const Wrapped<R> *>(now);
-    while (pos < m_data + m_reccnt && pos->rec.key < key)
-      pos++;
-
-    return pos - m_data;
-  }
-
-  size_t get_upper_bound(const K &key) const {
-    const InternalNode *now = m_root;
-    while (!is_leaf(reinterpret_cast<const byte *>(now))) {
-      const InternalNode *next = nullptr;
-      for (size_t i = 0; i < INTERNAL_FANOUT - 1; ++i) {
-        if (now->child[i + 1] == nullptr || key < now->keys[i]) {
-          next = reinterpret_cast<InternalNode *>(now->child[i]);
-          break;
-        }
-      }
-
-      now = next ? next
-                 : reinterpret_cast<const InternalNode *>(
-                       now->child[INTERNAL_FANOUT - 1]);
-    }
-
-    const Wrapped<R> *pos = reinterpret_cast<const Wrapped<R> *>(now);
-    while (pos < m_data + m_reccnt && pos->rec.key <= key)
-      pos++;
-
-    return pos - m_data;
-  }
-
-  const Wrapped<R> *get_record_at(size_t idx) const {
-    return (idx < m_reccnt) ? m_data + idx : nullptr;
-  }
-
-private:
-  void build_internal_levels() {
-    size_t n_leaf_nodes =
-        m_reccnt / LEAF_FANOUT + (m_reccnt % LEAF_FANOUT != 0);
-
-    size_t level_node_cnt = n_leaf_nodes;
-    size_t node_cnt = 0;
-    do {
-      level_node_cnt = level_node_cnt / INTERNAL_FANOUT +
-                       (level_node_cnt % INTERNAL_FANOUT != 0);
-      node_cnt += level_node_cnt;
-    } while (level_node_cnt > 1);
-
-    m_alloc_size += psudb::sf_aligned_calloc(CACHELINE_SIZE, node_cnt, NODE_SZ,
-                                             (byte **)&m_isam_nodes);
-    m_internal_node_cnt = node_cnt;
-
-    InternalNode *current_node = m_isam_nodes;
-
-    const Wrapped<R> *leaf_base = m_data;
-    const Wrapped<R> *leaf_stop = m_data + m_reccnt;
-    while (leaf_base < leaf_stop) {
-      size_t fanout = 0;
-      for (size_t i = 0; i < INTERNAL_FANOUT; ++i) {
-        auto rec_ptr = leaf_base + LEAF_FANOUT * i;
-        if (rec_ptr >= leaf_stop)
-          break;
-        const Wrapped<R> *sep_key =
-            std::min(rec_ptr + LEAF_FANOUT - 1, leaf_stop - 1);
-        current_node->keys[i] = sep_key->rec.key;
-        current_node->child[i] = (byte *)rec_ptr;
-        ++fanout;
-      }
-      current_node++;
-      leaf_base += fanout * LEAF_FANOUT;
-    }
-
-    auto level_start = m_isam_nodes;
-    auto level_stop = current_node;
-    auto current_level_node_cnt = level_stop - level_start;
-    while (current_level_node_cnt > 1) {
-      auto now = level_start;
-      while (now < level_stop) {
-        size_t child_cnt = 0;
-        for (size_t i = 0; i < INTERNAL_FANOUT; ++i) {
-          auto node_ptr = now + i;
-          ++child_cnt;
-          if (node_ptr >= level_stop)
+        for (size_t i = 0; i < INTERNAL_FANOUT - 1; i++)
+        {
+          if (node->child[i] == 0)
             break;
-          current_node->keys[i] = node_ptr->keys[INTERNAL_FANOUT - 1];
-          current_node->child[i] = (byte *)node_ptr;
+
+          next = node->child[i];
+
+          if (key < node->keys[i])
+            break;
         }
-        now += child_cnt;
-        current_node++;
+
+        now = next;
       }
-      level_start = level_stop;
-      level_stop = current_node;
-      current_level_node_cnt = level_stop - level_start;
+
+      if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
+      {
+        free(buffer);
+        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_lower_bound");
+      }
+
+      const Wrapped<R> *pos = reinterpret_cast<const Wrapped<R> *>(buffer);
+      size_t offset = LEAF_FANOUT;
+
+      for (size_t i = 0; i < LEAF_FANOUT; i++)
+      {
+        if (pos->rec.key >= key)
+        {
+          offset = i;
+          break;
+        }
+        pos++;
+      }
+
+      free(buffer);
+      return now * NODE_SZ + offset * sizeof(Wrapped<R>);
     }
 
-    assert(current_level_node_cnt == 1);
-    m_root = level_start;
-  }
+    ssize_t get_upper_bound(const K &key) const
+    {
+      PageNum now = m_root_page;
+      std::byte *buffer = nullptr;
+      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
 
-  bool is_leaf(const byte *ptr) const {
-    return ptr >= (const byte *)m_data &&
-           ptr < (const byte *)(m_data + m_reccnt);
-  }
+      while (!is_leaf(now))
+      {
+        if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
+        {
+          free(buffer);
+          throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_upper_bound");
+        }
 
-  psudb::BloomFilter<R> *m_bf;
-  InternalNode *m_isam_nodes;
-  InternalNode *m_root;
-  size_t m_reccnt;
-  size_t m_tombstone_cnt;
-  size_t m_internal_node_cnt;
-  size_t m_deleted_cnt;
-  size_t m_alloc_size;
+        InternalNode *node = (InternalNode *)buffer;
+        PageNum next = node->child[0];
 
-  Wrapped<R> *m_data;
-};
+        for (size_t i = 0; i < INTERNAL_FANOUT - 1; i++)
+        {
+          if (node->child[i] == 0)
+            break;
+
+          next = node->child[i];
+
+          if (key < node->keys[i])
+            break;
+        }
+
+        now = next;
+      }
+
+      if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
+      {
+        free(buffer);
+        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_upper_bound");
+      }
+
+      const Wrapped<R> *pos = reinterpret_cast<const Wrapped<R> *>(buffer);
+      size_t offset = LEAF_FANOUT;
+
+      for (size_t i = 0; i < LEAF_FANOUT; i++)
+      {
+        if (pos->rec.key > key)
+        {
+          offset = i;
+          break;
+        }
+        pos++;
+      }
+
+      free(buffer);
+      return now * NODE_SZ + offset * sizeof(Wrapped<R>);
+    }
+
+    const Wrapped<R> *get_record_at(size_t idx, std::byte *buffer) const
+    {
+      PageNum page_num = idx / LEAF_FANOUT + 1;
+
+      if (page_num > m_root_page)
+        return nullptr;
+
+      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
+
+      size_t bytes = pread(m_isam_fd, buffer, NODE_SZ, page_num * NODE_SZ);
+
+      if (bytes < 0)
+        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_record_at");
+
+      auto records = reinterpret_cast<Wrapped<R> *>(buffer);
+      size_t idx_in_page = idx % LEAF_FANOUT;
+
+      if (idx_in_page >= LEAF_FANOUT)
+        return nullptr;
+
+      return &records[idx_in_page];
+    }
+
+  private:
+    /**
+     * Move this to a more appropriate place later.
+     */
+    uuids::uuid generate_uuid()
+    {
+      std::random_device rd;
+      auto seed_data = std::array<int, std::mt19937::state_size>{};
+      std::generate(std::begin(seed_data), std::end(seed_data), std::ref(rd));
+      std::seed_seq seq(std::begin(seed_data), std::end(seed_data));
+      std::mt19937 generator(seq);
+      uuids::uuid_random_generator gen{generator};
+
+      uuids::uuid const id = gen();
+      assert(!id.is_nil());
+      assert(id.as_bytes().size() == 16);
+      assert(id.version() == uuids::uuid_version::random_number_based);
+      assert(id.variant() == uuids::uuid_variant::rfc);
+
+      return id;
+    }
+
+    std::vector<int> create_sorted_runs(BufferView<R> bv, size_t size_of_chunk = LEAF_FANOUT)
+    {
+      std::vector<int> run_fds;
+
+      std::string tmp_dir = "isam_tmp_" + uuids::to_string(m_id);
+
+      if (mkdir(tmp_dir.c_str(), 0755) < 0 && errno != EEXIST)
+      {
+        throw std::system_error(errno, std::generic_category(), "failed to create temporary directory for sorting");
+      }
+
+      for (size_t start = 0; start < m_reccnt; start += LEAF_FANOUT)
+      {
+        size_t chunk_size = std::min(size_of_chunk, m_reccnt - start);
+
+        Wrapped<R> *chunk = nullptr;
+        psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, (byte **)&chunk);
+
+        for (size_t i = 0; i < chunk_size; i++)
+        {
+          chunk[i] = *bv.get(start + i);
+        }
+
+        std::sort(chunk, chunk + chunk_size,
+                  [](const Wrapped<R> &a, const Wrapped<R> &b)
+                  {
+                    return a.rec < b.rec;
+                  });
+
+        std::string tmp_file = tmp_dir + "/" + std::to_string(run_fds.size());
+
+        int tmp_fd = open(tmp_file.c_str(), O_CREAT | O_RDWR, 0644);
+        if (tmp_fd < 0)
+        {
+          free(chunk);
+          throw std::system_error(errno, std::generic_category(), "failed to create temporary file for sorted runs");
+        }
+
+        if (pwrite(tmp_fd, chunk, NODE_SZ, 0) < 0)
+        {
+          close(tmp_fd);
+          free(chunk);
+          throw std::system_error(errno, std::generic_category(), "failed to write to temporary files for sorted runs");
+        }
+
+        remove(tmp_file.c_str());
+
+        run_fds.push_back(tmp_fd);
+        free(chunk);
+      }
+      return run_fds;
+    }
+
+    void cleanup_sorted_runs(const std::vector<int> &run_fds)
+    {
+      for (int fd : run_fds)
+        close(fd);
+
+      remove(("isam_tmp_" + uuids::to_string(m_id)).c_str());
+    }
+
+    off_t advance_offset(off_t curr, bool shards = false)
+    {
+      curr += sizeof(Wrapped<R>);
+
+      if (!shards)
+        return curr;
+
+      if (NODE_SZ - (curr % NODE_SZ) < sizeof(Wrapped<R>))
+        curr += NODE_SZ - (curr % NODE_SZ);
+
+      return curr;
+    }
+
+    void external_merge_sort(const std::vector<int> &run_fds, bool shards = false, const std::vector<size_t> &records_per_shard = {})
+    {
+      std::byte *buffer = nullptr;
+      std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> heap;
+      std::vector<off_t> file_offsets(run_fds.size(), shards ? NODE_SZ : 0);
+      std::vector<size_t> remaining(records_per_shard);
+
+      for (size_t i = 0; i < run_fds.size(); i++)
+      {
+        Wrapped<R> rec;
+        if (pread(run_fds[i], &rec, sizeof(Wrapped<R>), file_offsets[i]) < 0)
+        {
+          throw std::system_error(errno, std::generic_category(), "failed to read from sorted run file");
+        }
+
+        heap.push({rec, i});
+        if (!remaining.empty())
+          remaining[i]--;
+
+        file_offsets[i] = advance_offset(file_offsets[i], shards);
+      }
+
+      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
+      auto page = reinterpret_cast<Wrapped<R> *>(buffer);
+
+      size_t count = 0;
+      PageNum curr_page = 1;
+
+      while (!heap.empty())
+      {
+        HeapNode min = heap.top();
+        heap.pop();
+
+        if (count == LEAF_FANOUT)
+        {
+          if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0)
+          {
+            throw std::system_error(errno, std::generic_category(), "failed to write to ISAM file during external merge sort");
+          }
+
+          memset(page, 0, NODE_SZ);
+          count = 0;
+          curr_page++;
+        }
+
+        page[count++] = min.record;
+
+        Wrapped<R> next;
+        if (remaining.empty() || remaining[min.file_idx] > 0)
+        {
+          if (pread(run_fds[min.file_idx], &next, sizeof(Wrapped<R>), file_offsets[min.file_idx]) == sizeof(Wrapped<R>))
+          {
+            heap.push({next, min.file_idx});
+            if (!remaining.empty())
+              remaining[min.file_idx]--;
+            file_offsets[min.file_idx] = advance_offset(file_offsets[min.file_idx], shards);
+          }
+        }
+      }
+
+      if (count > 0)
+      {
+        if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0)
+        {
+          throw std::system_error(errno, std::generic_category(), "failed to write last page to ISAM file during external merge sort");
+        }
+      }
+
+      m_last_data_page = curr_page;
+
+      free(buffer);
+    }
+
+    void build_internal_levels(PageNum first_page, PageNum last_page)
+    {
+      if (first_page == last_page)
+      {
+        m_root_page = first_page;
+        return;
+      }
+
+      PageNum write_page = last_page + 1;
+      PageNum child_page = first_page;
+
+      while (child_page <= last_page)
+      {
+        InternalNode *node = nullptr;
+        psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, (byte **)&node);
+
+        for (size_t i = 0; i < INTERNAL_FANOUT; i++)
+        {
+          if (child_page > last_page)
+            break;
+
+          std::byte *buffer = nullptr;
+          psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
+          if (pread(m_isam_fd, buffer, NODE_SZ, child_page * NODE_SZ) < 0)
+          {
+            throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file while building internal levels");
+          }
+
+          size_t records_on_page = LEAF_FANOUT;
+
+          if (child_page <= m_last_data_page)
+          {
+            records_on_page = std::min(LEAF_FANOUT, m_reccnt - (child_page - 1) * LEAF_FANOUT);
+          }
+
+          Wrapped<R> *records = (Wrapped<R> *)(buffer);
+          node->keys[i] = records[records_on_page - 1].rec.key;
+          node->child[i] = child_page;
+          child_page++;
+          free(buffer);
+        }
+
+        if (pwrite(m_isam_fd, node, NODE_SZ, write_page * NODE_SZ) < 0)
+        {
+          throw std::system_error(errno, std::generic_category(), "failed to write internal node to ISAM file");
+        }
+        free(node);
+        write_page++;
+      }
+      build_internal_levels(last_page + 1, write_page - 1);
+    }
+
+    void write_header()
+    {
+      ISAMTreeHeader header;
+      std::memcpy(header.id.data(), m_id.as_bytes().data(), 16);
+      header.root_page = m_root_page;
+      header.last_data_page = m_last_data_page;
+      header.reccnt = m_reccnt;
+      header.internal_node_cnt = m_internal_node_cnt;
+
+      if (pwrite(m_isam_fd, &header, sizeof(header), 0) < 0)
+      {
+        throw std::runtime_error("failed to write ISAM tree header");
+      }
+    }
+
+    bool is_leaf(PageNum page_num) const
+    {
+      return page_num >= 1 && page_num <= m_last_data_page;
+    }
+
+    psudb::BloomFilter<R> *m_bf;
+    PageNum m_root_page;
+    PageNum m_last_data_page;
+    size_t m_reccnt;
+    size_t m_tombstone_cnt;
+    size_t m_internal_node_cnt;
+    size_t m_deleted_cnt;
+    size_t m_alloc_size;
+    uuids::uuid m_id;
+    int m_isam_fd;
+  };
 } // namespace de
