@@ -405,6 +405,8 @@ namespace de
         run_fds.push_back(tmp_fd);
         free(chunk);
       }
+      rmdir(tmp_dir.c_str());
+
       return run_fds;
     }
 
@@ -412,8 +414,6 @@ namespace de
     {
       for (int fd : run_fds)
         close(fd);
-
-      remove(("isam_tmp_" + uuids::to_string(m_id)).c_str());
     }
 
     off_t advance_offset(off_t curr, bool shards = false)
