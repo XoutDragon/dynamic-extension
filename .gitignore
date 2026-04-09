@@ -6,6 +6,9 @@ bin/*
 data
 .cache
 
+wal.log
+checkpoint.json
+
 tests/data
 
 .vscode

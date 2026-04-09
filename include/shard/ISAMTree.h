@@ -156,13 +156,13 @@ namespace de
 
       ISAMTreeHeader header;
 
-      if (pread(fd, &header, sizeof(ISAMTreeHeader), 0) < sizeof(ISAMTreeHeader))
+      if (pread(m_isam_fd, &header, sizeof(ISAMTreeHeader), 0) < sizeof(ISAMTreeHeader))
         throw std::system_error(errno, std::generic_category(), "failed to read ISAM Header from ISAM file");
 
       m_id = uuids::uuid(header.id);
       m_root_page = header.root_page;
       m_last_data_page = header.last_data_page;
-      m_reccnt = header.record_cnt;
+      m_reccnt = header.reccnt;
       m_internal_node_cnt = header.internal_node_cnt;
     }
 
@@ -180,7 +180,7 @@ namespace de
       return "isam_shard_" + uuids::to_string(m_id) + ".dat";
     }
 
-    Wrapped<R> *point_lookup(const R &rec, std::byte *buffer, bool filter = false)
+    Wrapped<R> *point_lookup(const R &rec, bool filter = false, std::byte *buffer = nullptr)
     {
       if (filter && !m_bf->lookup(rec))
         return nullptr;
