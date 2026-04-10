@@ -6,6 +6,10 @@ bin/*
 data
 .cache
 
+shards
+shards/*
+temp_shards
+temp_shards/*
 wal.log
 checkpoint.json
 

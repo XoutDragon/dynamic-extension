@@ -30,6 +30,9 @@ using psudb::BloomFilter;
 using psudb::byte;
 using psudb::CACHELINE_SIZE;
 
+#define SHARD_DIR "shards/"
+#define TEMP_SHARD_DIR "tmp_shards/"
+
 namespace de
 {
 
@@ -87,13 +90,7 @@ namespace de
       m_reccnt = buffer.get_record_count();
       m_tombstone_cnt = buffer.get_tombstone_count();
 
-      std::string shard_filename = get_filename();
-
-      m_isam_fd = open(shard_filename.c_str(), O_CREAT | O_RDWR, 0644);
-      if (m_isam_fd < 0)
-      {
-        throw std::system_error(errno, std::generic_category(), "failed to create ISAM file");
-      }
+      initialize();
 
       std::vector<int> run_fds = create_sorted_runs(std::move(buffer));
       external_merge_sort(run_fds);
@@ -107,6 +104,11 @@ namespace de
       m_internal_node_cnt = m_root_page - m_last_data_page;
 
       write_header();
+
+      std::string tmp_file = std::string(TEMP_SHARD_DIR) + get_filename();
+      std::string renamed_file = std::string(SHARD_DIR) + get_filename();
+
+      rename(tmp_file.c_str(), renamed_file.c_str());
     }
 
     ISAMTree(std::vector<ISAMTree *> const &shards)
@@ -128,12 +130,7 @@ namespace de
         records_per_shard.push_back(shard->get_record_count());
       }
 
-      std::string shard_filename = get_filename();
-
-      m_isam_fd = open(shard_filename.c_str(), O_CREAT | O_RDWR, 0644);
-
-      if (m_isam_fd < 0)
-        throw std::system_error(errno, std::generic_category(), "failed to create ISAM file");
+      initialize();
 
       external_merge_sort(run_fds, true, records_per_shard);
 
@@ -143,6 +140,11 @@ namespace de
       m_internal_node_cnt = m_root_page - m_last_data_page;
 
       write_header();
+
+      std::string tmp_file = std::string(TEMP_SHARD_DIR) + get_filename();
+      std::string renamed_file = std::string(SHARD_DIR) + get_filename();
+
+      rename(tmp_file.c_str(), renamed_file.c_str());
     }
 
     ISAMTree(std::string filename)
@@ -150,7 +152,8 @@ namespace de
           m_tombstone_cnt(0), m_internal_node_cnt(0), m_deleted_cnt(0),
           m_alloc_size(0), m_last_data_page(0), m_isam_fd(-1)
     {
-      int m_isam_fd = open(filename.c_str(), O_RDONLY);
+      std::string file_path = std::string(SHARD_DIR) + filename;
+      int m_isam_fd = open(file_path.c_str(), O_RDONLY);
       if (m_isam_fd < 0)
         throw std::system_error(errno, std::generic_category(), "failed to open ISAM file");
 
@@ -177,7 +180,7 @@ namespace de
 
     std::string get_filename() const
     {
-      return "isam_shard_" + uuids::to_string(m_id) + ".dat";
+      return uuids::to_string(m_id) + ".dat";
     }
 
     Wrapped<R> *point_lookup(const R &rec, bool filter = false, std::byte *buffer = nullptr)
@@ -374,6 +377,29 @@ namespace de
       return id;
     }
 
+    void initialize()
+    {
+      std::string shard_filename = get_filename();
+
+      if (mkdir(SHARD_DIR, 0755) < 0 && errno != EEXIST)
+      {
+        throw std::system_error(errno, std::generic_category(), "failed to create shard directory");
+      }
+
+      if (mkdir(TEMP_SHARD_DIR, 0755) < 0 && errno != EEXIST)
+      {
+        throw std::system_error(errno, std::generic_category(), "failed to create shard directory");
+      }
+
+      std::string tmp_file_path = std::string(TEMP_SHARD_DIR) + shard_filename;
+
+      m_isam_fd = open(tmp_file_path.c_str(), O_CREAT | O_RDWR, 0644);
+      if (m_isam_fd < 0)
+      {
+        throw std::system_error(errno, std::generic_category(), "failed to create ISAM file");
+      }
+    }
+
     std::vector<int> create_sorted_runs(BufferView<R> bv, size_t size_of_chunk = LEAF_FANOUT)
     {
       std::vector<int> run_fds;
@@ -403,7 +429,7 @@ namespace de
                     return a.rec < b.rec;
                   });
 
-        std::string tmp_file = tmp_dir + "/" + std::to_string(run_fds.size());
+        std::string tmp_file = tmp_dir + std::to_string(run_fds.size());
 
         int tmp_fd = open(tmp_file.c_str(), O_CREAT | O_RDWR, 0644);
         if (tmp_fd < 0)

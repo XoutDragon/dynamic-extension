@@ -1,15 +1,19 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <dirent.h>
 #include <fcntl.h>
-#include <unistd.h>
+#include <nlohmann/json.hpp>
+#include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "framework/util/Configuration.h"
 #include "framework/structure/InternalLevel.h"
 
 #define CHECKPOINT_PATH "checkpoint.json"
 #define CHECKPOINT_TMP_PATH "checkpoint_tmp.json"
+
+#define TEMP_SHARD_DIR "tmp_shards/"
 
 namespace de
 {
@@ -82,6 +86,17 @@ namespace de
 
             for (auto &shard : shards)
                 levels[level]->append_shard(shard.get<std::string>());
+        }
+
+        DIR *dir = opendir(TEMP_SHARD_DIR);
+        if (dir == NULL)
+            return;
+
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL)
+        {
+            std::string tmp_file = std::string(TEMP_SHARD_DIR) + entry->d_name;
+            remove(tmp_file.c_str());
         }
     }
 }
