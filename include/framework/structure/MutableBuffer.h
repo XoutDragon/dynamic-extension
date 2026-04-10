@@ -86,7 +86,7 @@ namespace de
       size_t pos = tail % m_cap;
 
       if (logging)
-        m_wal->add(wrec);
+        m_wal->append(wrec);
 
       m_data[pos] = wrec;
       m_data[pos].set_timestamp(pos);
@@ -125,6 +125,7 @@ namespace de
 
     bool delete_record(const R &rec)
     {
+      m_wal->remove(rec);
       return get_buffer_view().delete_record(rec);
     }
 
@@ -176,6 +177,8 @@ namespace de
         return false;
       }
 
+      m_wal->flush_begin();
+
       m_active_head_advance.store(true);
 
       buffer_head new_hd = {new_head, 0};
@@ -189,7 +192,7 @@ namespace de
 
       /* move the current head into the old head */
       m_old_head.store(cur_hd);
-      m_wal->truncate();
+      m_wal->flush_complete();
       m_active_head_advance.store(false);
       return true;
     }
