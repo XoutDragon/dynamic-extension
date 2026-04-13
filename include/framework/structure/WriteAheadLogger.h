@@ -5,9 +5,10 @@
 
 #pragma once
 
-#include <unistd.h>
+#include <algorithm>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 #include "framework/interface/Record.h"
@@ -31,7 +32,6 @@ namespace de
         };
         struct WAL_Entry
         {
-            int lsn;
             int type;
             Wrapped<R> payload;
         };
@@ -55,7 +55,6 @@ namespace de
         void append(Wrapped<R> &rec)
         {
             WAL_Entry entry;
-            entry.lsn = m_lsn;
             entry.type = WAL_ENTRY_TYPES::INSERT;
             entry.payload = rec;
 
@@ -65,25 +64,15 @@ namespace de
         void remove(Wrapped<R> &rec)
         {
             WAL_Entry entry;
-            off_t offset = 0;
+            entry.type = WAL_ENTRY_TYPES::DELETE;
+            entry.payload = rec;
 
-            while (pread(m_wal_fd, &entry, sizeof(entry), offset) == sizeof(entry))
-            {
-                offset += sizeof(entry);
-
-                if (entry.payload.rec.key == rec.key && entry.payload.rec.value == rec.value)
-                {
-                    entry.type = WAL_ENTRY_TYPES::DELETE;
-                    pwrite(m_wal_fd, &entry, sizeof(entry), offset);
-                    break;
-                }
-            }
+            write(entry);
         }
 
         void flush_begin()
         {
             WAL_Entry entry;
-            entry.lsn = m_lsn;
             entry.type = WAL_ENTRY_TYPES::FLUSH_B;
             entry.payload = {};
 
@@ -93,7 +82,6 @@ namespace de
         void flush_complete()
         {
             WAL_Entry entry;
-            entry.lsn = m_lsn;
             entry.type = WAL_ENTRY_TYPES::FLUSH_C;
             entry.payload = {};
 
@@ -130,16 +118,29 @@ namespace de
             WAL_Entry entry;
             off_t offset = 0;
 
+            std::vector<WAL_Entry> entries;
+            std::vector<u_int64_t> deleted;
+
             while (pread(fd, &entry, sizeof(entry), offset) == sizeof(entry))
             {
                 offset += sizeof(entry);
-                if (entry.type == WAL_ENTRY_TYPES::DELETE || entry.type == WAL_ENTRY_TYPES::FLUSH_B || entry.type == WAL_ENTRY_TYPES::FLUSH_C)
+                if (entry.type == WAL_ENTRY_TYPES::FLUSH_B || entry.type == WAL_ENTRY_TYPES::FLUSH_C)
                     continue;
 
-                buffer->append(entry.payload.rec, entry.payload.is_tombstone(), false);
+                if (entry.type == WAL_ENTRY_TYPES::DELETE)
+                    deleted.push_back(entry.payload.rec.key);
+                else
+                    entries.push_back(entry);
             }
 
             close(fd);
+            for (auto &e : entries)
+            {
+                if (std::find(deleted.begin(), deleted.end(), e.payload.rec.key) == deleted.end())
+                {
+                    buffer->append(e.payload.rec, e.payload.is_tombstone(), false);
+                }
+            }
         }
 
     private:

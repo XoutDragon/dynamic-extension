@@ -26,7 +26,7 @@ START_TEST(rebuild)
 
     auto *de = new DynamicExtension<S, Q>(buffer_low_watermark, buffer_high_watermark, scale_factor);
 
-    for (size_t i = 0; i <= buffer_low_watermark * 10; i++)
+    for (size_t i = 0; i < buffer_low_watermark * 10; i++)
     {
         R rec;
         rec.key = i * 100;
