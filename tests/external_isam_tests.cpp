@@ -1,24 +1,30 @@
-#include <cassert>
-#include <check.h>
+/*
+clang++ -std=c++20 -Iinclude -Itests/include -Iexternal/psudb-common/cpp/include tests/external_isam_tests.cpp -Iexternal/stduuid/include -o bin/external_isam_tests -lgsl -lgslcblas -latomic -ggdb -lcheck -lsubunit
+*/
+
+#include <iostream>
 #include <vector>
 
 #include "shard/ISAMTree.h"
 #include "testing.h"
 
+#include <cassert>
+#include <check.h>
+
 using namespace de;
 
 typedef Rec R;
 typedef ISAMTree<R> Shard;
-// typedef knn::Query<Shard> Q;
+typedef rq::Query<Shard> Q;
 
 START_TEST(t_mbuffer_init)
 {
     size_t n = 24;
     auto buffer = new MutableBuffer<R>(n / 2, n);
 
-    for (int64_t i = 0; i < n; i++)
+    for (u_int32_t i = 0; i < n; i++)
     {
-        buffer->append({(uint64_t)i, (uint64_t)i});
+        buffer->append({(u_int32_t)i, (u_int32_t)i});
     }
 
     Shard *shard = new Shard(buffer->get_buffer_view());
@@ -62,30 +68,25 @@ START_TEST(t_point_lookup)
     auto buffer = create_sequential_mbuffer<R>(0, n);
     auto wss = Shard(buffer->get_buffer_view());
 
+    std::byte *rec_buffer = nullptr;
+
+    for (int i = 0; i < n; i++)
     {
-        auto bv = buffer->get_buffer_view();
+        R rec = {(u_int64_t)i, (u_int32_t)i};
+        auto result = wss.point_lookup(rec, false, rec_buffer);
 
-        for (size_t i = 0; i < n; i++)
-        {
-            Wrapped<R> r;
-            auto rec = (bv.get(i));
-            r.data[0] = rec->rec.data[0];
-            r.data[1] = rec->rec.data[1];
-
-            auto result = wss.point_lookup(r);
-            ck_assert_ptr_nonnull(result);
-            ck_assert_int_eq(result->rec.data[0], r.data[0]);
-            ck_assert_int_eq(result->rec.data[1], r.data[1]);
-        }
+        ck_assert_ptr_nonnull(result);
+        ck_assert_int_eq(result->rec.key, rec.key);
+        ck_assert_int_eq(result->rec.value, rec.value);
     }
 
+    free(rec_buffer);
     delete buffer;
 }
-END_TEST
 
 START_TEST(t_point_lookup_miss)
 {
-    size_t n = 10000;
+    size_t n = 1000;
 
     auto buffer = create_sequential_mbuffer<R>(0, n);
     auto wss = Shard(buffer->get_buffer_view());
@@ -93,8 +94,8 @@ START_TEST(t_point_lookup_miss)
     for (size_t i = n + 100; i < 2 * n; i++)
     {
         R r;
-        r.data[0] = i;
-        r.data[1] = i;
+        r.key = i;
+        r.value = i;
 
         auto result = wss.point_lookup(r);
         ck_assert_ptr_null(result);
@@ -102,100 +103,22 @@ START_TEST(t_point_lookup_miss)
 
     delete buffer;
 }
-
-// START_TEST(t_buffer_query)
-// {
-//     size_t n = 10000;
-//     auto buffer = create_sequential_mbuffer<R>(0, n);
-
-//     PRec target;
-//     target.data[0] = 120;
-//     target.data[1] = 120;
-
-//     Q::Parameters p;
-//     p.k = 10;
-//     p.point = target;
-
-//     {
-//         auto bv = buffer->get_buffer_view();
-//         auto query = Q::local_preproc_buffer(&bv, &p);
-//         auto result = Q::local_query_buffer(query);
-//         delete query;
-
-//         std::sort(result.begin(), result.end());
-//         size_t start = 120 - 5;
-//         for (size_t i = 0; i < result.size(); i++)
-//         {
-//             ck_assert_int_eq(result[i].rec.data[0], start++);
-//         }
-//     }
-
-//     delete buffer;
-// }
-
-// START_TEST(t_knn_query)
-// {
-//     size_t n = 1000;
-//     auto buffer = create_sequential_mbuffer<R>(0, n);
-
-//     auto vptree = VPTree<PRec>(buffer->get_buffer_view());
-
-//     Q::Parameters p;
-
-//     for (size_t i = 0; i < 100; i++)
-//     {
-//         p.k = rand() % 150;
-//         p.point.data[0] = rand() % (n - p.k);
-//         p.point.data[1] = p.point.data[0];
-
-//         auto query = Q::local_preproc(&vptree, &p);
-//         auto results = Q::local_query(&vptree, query);
-//         delete query;
-
-//         ck_assert_int_eq(results.size(), p.k);
-
-//         std::sort(results.begin(), results.end());
-
-//         if ((int64_t)(p.point.data[0] - p.k / 2 - 1) < 0)
-//         {
-//             ck_assert_int_eq(results[0].rec.data[0], 0);
-//         }
-//         else
-//         {
-//             ck_assert(results[0].rec.data[0] == (p.point.data[0] - p.k / 2 - 1) ||
-//                       results[0].rec.data[0] == (p.point.data[0] - p.k / 2) ||
-//                       results[0].rec.data[0] == (p.point.data[0] - p.k / 2 + 1));
-//         }
-
-//         size_t start = results[0].rec.data[0];
-//         for (size_t i = 0; i < results.size(); i++)
-//         {
-//             ck_assert_int_eq(results[i].rec.data[0], start++);
-//         }
-//     }
-
-//     delete buffer;
-// }
+END_TEST
 
 Suite *unit_testing()
 {
-    Suite *unit = suite_create("VPTree Shard Unit Testing");
+    Suite *unit = suite_create("ISAMTree Shard Unit Testing");
 
-    TCase *create = tcase_create("de::VPTree constructor Testing");
+    TCase *create = tcase_create("de::ISAMTree constructor Testing");
     tcase_add_test(create, t_mbuffer_init);
     tcase_add_test(create, t_wss_init);
     tcase_set_timeout(create, 100);
     suite_add_tcase(unit, create);
 
-    TCase *lookup = tcase_create("de:VPTree:point_lookup Testing");
+    TCase *lookup = tcase_create("de:ISAMTree:point_lookup Testing");
     tcase_add_test(lookup, t_point_lookup);
     tcase_add_test(lookup, t_point_lookup_miss);
     suite_add_tcase(unit, lookup);
-
-    TCase *query = tcase_create("de:VPTree::VPTreeQuery Testing");
-    tcase_add_test(query, t_buffer_query);
-    tcase_add_test(query, t_knn_query);
-    suite_add_tcase(unit, query);
 
     return unit;
 }

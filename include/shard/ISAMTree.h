@@ -153,7 +153,7 @@ namespace de
           m_alloc_size(0), m_last_data_page(0), m_isam_fd(-1)
     {
       std::string file_path = std::string(SHARD_DIR) + filename;
-      int m_isam_fd = open(file_path.c_str(), O_RDONLY);
+      m_isam_fd = open(file_path.c_str(), O_RDONLY);
       if (m_isam_fd < 0)
         throw std::system_error(errno, std::generic_category(), "failed to open ISAM file");
 
@@ -207,11 +207,9 @@ namespace de
 
       if (records[page_offset].rec == rec)
       {
-        Wrapped<R> *result = new Wrapped<R>(records[page_offset]);
-        return result;
+        return records + page_offset;
       }
 
-      free(buffer);
       return nullptr;
     }
 
@@ -248,7 +246,7 @@ namespace de
 
           next = node->child[i];
 
-          if (key < node->keys[i])
+          if (key <= node->keys[i])
             break;
         }
 
@@ -295,14 +293,14 @@ namespace de
         InternalNode *node = (InternalNode *)buffer;
         PageNum next = node->child[0];
 
+        if (next == 0)
+          break;
+
         for (size_t i = 0; i < INTERNAL_FANOUT - 1; i++)
         {
-          if (node->child[i] == 0)
-            break;
-
           next = node->child[i];
 
-          if (key < node->keys[i])
+          if (key <= node->keys[i])
             break;
         }
 
@@ -332,7 +330,7 @@ namespace de
       return now * NODE_SZ + offset * sizeof(Wrapped<R>);
     }
 
-    const Wrapped<R> *get_record_at(size_t idx, std::byte *buffer) const
+    const Wrapped<R> *get_record_at(size_t idx, std::byte *buffer = nullptr) const
     {
       PageNum page_num = idx / LEAF_FANOUT + 1;
 
@@ -429,7 +427,7 @@ namespace de
                     return a.rec < b.rec;
                   });
 
-        std::string tmp_file = tmp_dir + std::to_string(run_fds.size());
+        std::string tmp_file = tmp_dir + "/" + std::to_string(run_fds.size());
 
         int tmp_fd = open(tmp_file.c_str(), O_CREAT | O_RDWR, 0644);
         if (tmp_fd < 0)
