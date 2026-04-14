@@ -5,8 +5,8 @@ clang++ -std=c++20 -Iinclude -Itests/include -Iexternal/psudb-common/cpp/include
 #include <iostream>
 #include <vector>
 
-#include "shard/ISAMTree.h"
-#include "query/rangequery.h"
+#include "shard/ExternalISAMTree.h"
+#include "query/pointlookup.h"
 #include "psu-util/timer.h"
 #include "testing.h"
 
@@ -17,7 +17,7 @@ using namespace de;
 
 typedef Rec R;
 typedef ISAMTree<R> Shard;
-typedef rq::Query<Shard> Q;
+typedef pl::Query<Shard> Q;
 
 START_TEST(t_mbuffer_init)
 {

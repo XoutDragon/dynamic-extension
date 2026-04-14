@@ -5,15 +5,15 @@
 
 #include "framework/DynamicExtension.h"
 #include "include/testing.h"
-#include "query/rangequery.h"
-#include "shard/ISAMTree.h"
+#include "query/pointlookup.h"
+#include "shard/ExternalISAMTree.h"
 
 #include <check.h>
 using namespace de;
 
 typedef Rec R;
 typedef ISAMTree<R> S;
-typedef rq::Query<S> Q;
+typedef pl::Query<S> Q;
 
 #define SHARD_DIR "shards/"
 #define TEMP_SHARD_DIR "tmp_shards/"
