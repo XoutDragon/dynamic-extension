@@ -92,8 +92,12 @@ namespace de
 
       initialize();
 
+      std::vector<size_t> records_per_run;
+      for (size_t start = 0; start < m_reccnt; start += LEAF_FANOUT)
+        records_per_run.push_back(std::min(LEAF_FANOUT, m_reccnt - start));
+
       std::vector<int> run_fds = create_sorted_runs(std::move(buffer));
-      external_merge_sort(run_fds);
+      external_merge_sort(run_fds, false, records_per_run);
       cleanup_sorted_runs(run_fds);
 
       if (m_reccnt > 0)
@@ -459,43 +463,35 @@ namespace de
         close(fd);
     }
 
-    off_t advance_offset(off_t curr, bool shards = false)
-    {
-      curr += sizeof(Wrapped<R>);
-
-      if (!shards)
-        return curr;
-
-      if (NODE_SZ - (curr % NODE_SZ) < sizeof(Wrapped<R>))
-        curr += NODE_SZ - (curr % NODE_SZ);
-
-      return curr;
-    }
-
     void external_merge_sort(const std::vector<int> &run_fds, bool shards = false, const std::vector<size_t> &records_per_shard = {})
     {
-      std::byte *buffer = nullptr;
-      std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> heap;
-      std::vector<off_t> file_offsets(run_fds.size(), shards ? NODE_SZ : 0);
+      std::vector<std::byte *> buffers(run_fds.size(), nullptr);
+      std::vector<off_t> insert_cnt(run_fds.size(), 0);
       std::vector<size_t> remaining(records_per_shard);
+
+      for (size_t i = 0; i < buffers.size(); i++)
+        psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffers[i]);
+
+      std::byte *output_buffer = nullptr;
+      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &output_buffer);
+      memset(output_buffer, 0, NODE_SZ);
+      auto page = reinterpret_cast<Wrapped<R> *>(output_buffer);
+
+      std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> heap;
 
       for (size_t i = 0; i < run_fds.size(); i++)
       {
-        Wrapped<R> rec;
-        if (pread(run_fds[i], &rec, sizeof(Wrapped<R>), file_offsets[i]) < 0)
-        {
-          throw std::system_error(errno, std::generic_category(), "failed to read from sorted run file");
-        }
+        if (pread(run_fds[i], buffers[i], NODE_SZ, shards ? NODE_SZ : 0) < 0)
+          throw std::system_error(errno, std::generic_category(), "failed to read from sorted runs");
 
-        heap.push({rec, i});
+        auto recs = reinterpret_cast<Wrapped<R> *>(buffers[i]);
+
+        heap.push({recs[0], i});
         if (!remaining.empty())
           remaining[i]--;
 
-        file_offsets[i] = advance_offset(file_offsets[i], shards);
+        insert_cnt[i]++;
       }
-
-      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
-      auto page = reinterpret_cast<Wrapped<R> *>(buffer);
 
       size_t count = 0;
       PageNum curr_page = 1;
@@ -519,16 +515,22 @@ namespace de
 
         page[count++] = min.record;
 
-        Wrapped<R> next;
         if (remaining.empty() || remaining[min.file_idx] > 0)
         {
-          if (pread(run_fds[min.file_idx], &next, sizeof(Wrapped<R>), file_offsets[min.file_idx]) == sizeof(Wrapped<R>))
+          if (insert_cnt[min.file_idx] % LEAF_FANOUT == 0)
           {
-            heap.push({next, min.file_idx});
-            if (!remaining.empty())
-              remaining[min.file_idx]--;
-            file_offsets[min.file_idx] = advance_offset(file_offsets[min.file_idx], shards);
+            size_t page_num = insert_cnt[min.file_idx] / LEAF_FANOUT;
+            if (pread(run_fds[min.file_idx], buffers[min.file_idx], NODE_SZ, (shards ? (page_num + 1) : page_num) * NODE_SZ) < 0)
+              throw std::system_error(errno, std::generic_category(), "failed to read from sorted runs");
           }
+
+          auto recs = reinterpret_cast<Wrapped<R> *>(buffers[min.file_idx]);
+
+          heap.push({recs[insert_cnt[min.file_idx] % LEAF_FANOUT], min.file_idx});
+          if (!remaining.empty())
+            remaining[min.file_idx]--;
+
+          insert_cnt[min.file_idx]++;
         }
       }
 
@@ -542,7 +544,8 @@ namespace de
 
       m_last_data_page = curr_page;
 
-      free(buffer);
+      for (auto buffer : buffers)
+        free(buffer);
     }
 
     void build_internal_levels(PageNum first_page, PageNum last_page)
