@@ -12,9 +12,9 @@
 
 template <typename SchedType>
 concept SchedulerInterface = requires(SchedType s, size_t i, void *vp,
-                                      de::Job j) {
+                                      de::Job j, std::byte *buff) {
   {SchedType(i, i)};
-  {s.schedule_job(j, i, vp, i)} -> std::convertible_to<void>;
+  {s.schedule_job(j, i, vp, buff, i)} -> std::convertible_to<void>;
   {s.shutdown()};
   {s.print_statistics()};
 };

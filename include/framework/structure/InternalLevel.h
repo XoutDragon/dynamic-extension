@@ -205,7 +205,7 @@ namespace de
       }
     }
 
-    bool check_tombstone(size_t shard_stop, const RecordType &rec)
+    bool check_tombstone(size_t shard_stop, const RecordType &rec, std::byte *buffer=nullptr)
     {
       if (m_shard_cnt == 0)
         return false;
@@ -214,7 +214,7 @@ namespace de
       {
         if (m_shards[i])
         {
-          auto res = m_shards[i]->point_lookup(rec, true);
+          auto res = m_shards[i]->point_lookup(rec, true, buffer);
           if (res && res->is_tombstone())
           {
             return true;
@@ -224,7 +224,7 @@ namespace de
       return false;
     }
 
-    bool delete_record(const RecordType &rec)
+    bool delete_record(const RecordType &rec, std::byte *buffer)
     {
       if (m_shard_cnt == 0)
         return false;
@@ -233,7 +233,7 @@ namespace de
       {
         if (m_shards[i])
         {
-          auto res = m_shards[i]->point_lookup(rec);
+          auto res = m_shards[i]->point_lookup(rec, false, buffer);
           if (res)
           {
             res->set_delete();

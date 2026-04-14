@@ -53,13 +53,13 @@ public:
     m_sched_wakeup_thrd.join();
   }
 
-  void schedule_job(std::function<void(void *)> job, size_t size, void *args,
-                    size_t type = 0) {
+  void schedule_job(std::function<void(void *, std::byte)> job, size_t size, void *args,
+                    std::byte *buffer=nullptr, size_t type = 0) {
     std::unique_lock<std::mutex> lk(m_cv_lock);
     size_t ts = m_counter.fetch_add(1);
 
     m_stats.job_queued(ts, type, size);
-    m_task_queue.push(Task(size, ts, job, args, type, &m_stats));
+    m_task_queue.push(Task(size, ts, job, args, type, buffer, &m_stats));
 
     m_cv.notify_all();
   }

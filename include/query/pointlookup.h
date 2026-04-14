@@ -65,10 +65,10 @@ public:
     return;
   }
 
-  static std::vector<LocalResultType> local_query(S *shard, LocalQuery *query) {
+  static std::vector<LocalResultType> local_query(S *shard, LocalQuery *query, std::byte *buffer) {
     std::vector<LocalResultType> result;
 
-    auto r = shard->point_lookup({query->global_parms.search_key, 0});
+    auto r = shard->point_lookup({query->global_parms.search_key, 0}, false, buffer);
 
     if (r) {
       result.push_back(*r);

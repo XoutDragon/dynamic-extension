@@ -40,19 +40,20 @@ template <ShardInterface S, QueryInterface<S> Q, typename DE> struct QueryArgs {
   DE *extension;
 };
 
-typedef std::function<void(void *)> Job;
+typedef std::function<void(void *, std::byte*)> Job;
 
 struct Task {
   Task(size_t size, size_t ts, Job job, void *args, size_t type = 0,
-       SchedulerStatistics *stats = nullptr)
+       std::byte *buff = nullptr, SchedulerStatistics *stats = nullptr)
       : m_job(job), m_size(size), m_timestamp(ts), m_args(args), m_type(type),
-        m_stats(stats) {}
+        m_buff(buff), m_stats(stats) {}
 
   Job m_job;
   size_t m_size;
   size_t m_timestamp;
   void *m_args;
   size_t m_type;
+  std::byte *m_buff;
   SchedulerStatistics *m_stats;
 
   friend bool operator<(const Task &self, const Task &other) {
@@ -69,7 +70,7 @@ struct Task {
       m_stats->job_begin(m_timestamp);
     }
 
-    m_job(m_args);
+    m_job(m_args, m_buff);
 
     if (m_stats) {
       m_stats->job_complete(m_timestamp);

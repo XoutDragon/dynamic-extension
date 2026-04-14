@@ -107,11 +107,11 @@ namespace de
      * assumed that no duplicate records exist. In the case of duplicates, this
      * function will still "work", but in the sense of "delete first match".
      */
-    int tagged_delete(const RecordType &rec)
+    int tagged_delete(const RecordType &rec, std::byte *buffer=nullptr)
     {
       for (auto level : m_levels)
       {
-        if (level && level->delete_record(rec))
+        if (level && level->delete_record(rec, buffer))
         {
           return 1;
         }

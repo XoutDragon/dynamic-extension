@@ -28,12 +28,12 @@ public:
 
   ~SerialScheduler() = default;
 
-  void schedule_job(std::function<void(void *)> job, size_t size, void *args,
+  void schedule_job(std::function<void(void *, std::byte *)> job, size_t size, void *args, std::byte *buffer=nullptr,
                     size_t type = 0) {
     size_t ts = m_counter++;
     m_stats.job_queued(ts, type, size);
     m_stats.job_scheduled(ts);
-    auto t = Task(size, ts, job, args, type, &m_stats);
+    auto t = Task(size, ts, job, args, type, buffer, &m_stats);
     t(0);
   }
 

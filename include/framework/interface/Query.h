@@ -40,7 +40,8 @@ concept QueryInterface = LocalResultInterface<LOCAL_RESULT> &&
              SHARD *shard, std::vector<LOCAL *> &local_queries,
              std::vector<std::vector<LOCAL_RESULT>> &local_results,
              std::vector<RESULT> &result,
-             BufferView<typename SHARD::RECORD> *bv) {
+             BufferView<typename SHARD::RECORD> *bv,
+             std::byte *buff) {
 
   /*
    * Given a set of query parameters and a shard, return a local query
@@ -72,7 +73,7 @@ concept QueryInterface = LocalResultInterface<LOCAL_RESULT> &&
    * a vector of LOCAL_RESULT objects defining the query result.
    */
   {
-    QUERY::local_query(shard, local)
+    QUERY::local_query(shard, local, buff)
     } -> std::convertible_to<std::vector<LOCAL_RESULT>>;
 
   /*

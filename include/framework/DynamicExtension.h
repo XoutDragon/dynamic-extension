@@ -156,7 +156,7 @@ public:
    *          failure means that hte record to be deleted could not be
    *          found in the index, and should *not* be retried.
    */
-  int erase(const RecordType &rec) {
+  int erase(const RecordType &rec, std::byte *buffer=nullptr) {
     // FIXME: delete tagging will require a lot of extra work to get
     //        operating "correctly" in a concurrent environment.
 
@@ -172,7 +172,7 @@ public:
       auto view = m_buffer->get_buffer_view();
 
       auto epoch = get_active_epoch();
-      if (epoch->get_structure()->tagged_delete(rec)) {
+      if (epoch->get_structure()->tagged_delete(rec, buffer)) {
         end_job(epoch);
         return 1;
       }
@@ -203,8 +203,8 @@ public:
    *          query completion
    */
   std::future<std::vector<QueryResult>>
-  query(Parameters &&parms) {
-    return schedule_query(std::move(parms));
+  query(Parameters &&parms, std::byte *buffer=nullptr) {
+    return schedule_query(std::move(parms), buffer);
   }
 
   /**
@@ -554,7 +554,7 @@ private:
     delete epoch;
   }
 
-  static void reconstruction(void *arguments) {
+  static void reconstruction(void *arguments, std::byte *buffer=nullptr) {
     auto args = (ReconstructionArgs<ShardType, QueryType, L> *)arguments;
 
     ((DynamicExtension *)args->extension)->SetThreadAffinity();
@@ -606,7 +606,7 @@ private:
     delete args;
   }
 
-  static void async_query(void *arguments) {
+  static void async_query(void *arguments, std::byte *buff) {
     auto *args = 
       (QueryArgs<ShardType, QueryType, DynamicExtension> *) arguments;
 
@@ -641,7 +641,8 @@ private:
           shid = INVALID_SHID;
         } else { /*execute local queries */
           local_results = QueryType::local_query(shards[i - 1].second,
-                                                 local_queries[i - 1]);
+                                                 local_queries[i - 1],
+                                                 buffer);
           shid = shards[i - 1].first;
         }
 
@@ -692,18 +693,18 @@ private:
     /* NOTE: args is deleted by the reconstruction job, so shouldn't be freed
      * here */
 
-    m_sched.schedule_job(reconstruction, 0, args, RECONSTRUCTION);
+    m_sched.schedule_job(reconstruction, 0, args, nullptr, RECONSTRUCTION);
   }
 
   std::future<std::vector<QueryResult>>
-  schedule_query(Parameters &&query_parms) {
+  schedule_query(Parameters &&query_parms, std::byte *buffer) {
     auto args =
         new QueryArgs<ShardType, QueryType, DynamicExtension>();
     args->extension = this;
     args->query_parms = std::move(query_parms);
     auto result = args->result_set.get_future();
 
-    m_sched.schedule_job(async_query, 0, (void *)args, QUERY);
+    m_sched.schedule_job(async_query, 0, (void *)args, buffer, QUERY);
 
     return result;
   }

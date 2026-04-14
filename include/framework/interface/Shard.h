@@ -16,7 +16,7 @@ template <typename SHARD>
 concept ShardInterface = RecordInterface<typename SHARD::RECORD> &&
     requires(SHARD shard, const std::vector<SHARD *> &shard_vector, bool b,
              BufferView<typename SHARD::RECORD> bv,
-             typename SHARD::RECORD rec) {
+             typename SHARD::RECORD rec, std::byte *buff) {
   /* construct a shard from a vector of shards of the same type */
   {SHARD(shard_vector)};
 
@@ -25,7 +25,7 @@ concept ShardInterface = RecordInterface<typename SHARD::RECORD> &&
 
   /* perform a lookup for a record matching rec and return a pointer to it */
   {
-    shard.point_lookup(rec, b)
+    shard.point_lookup(rec, b, buff)
     } -> std::same_as<Wrapped<typename SHARD::RECORD> *>;
 
   /*
