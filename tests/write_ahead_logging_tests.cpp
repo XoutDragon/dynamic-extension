@@ -14,7 +14,7 @@ START_TEST(replay)
 
     auto buffer = new MutableBuffer<Rec>(lwm, hwm);
 
-    for (int i = 0; i < lwm - 1; i++)
+    for (size_t i = 0; i < lwm - 1; i++)
     {
         Rec r = {(u_int64_t)i, (u_int32_t)i};
         buffer->append(r);
@@ -27,7 +27,7 @@ START_TEST(replay)
 
     ck_assert_int_eq(bv.get_record_count(), 49);
 
-    for (int i = 0; i < lwm - 1; i++)
+    for (size_t i = 0; i < lwm - 1; i++)
     {
         ck_assert_int_eq((bv.get(i))->rec.key, i);
         ck_assert_int_eq((bv.get(i))->rec.value, i);

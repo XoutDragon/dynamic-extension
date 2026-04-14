@@ -7,6 +7,7 @@ clang++ -std=c++20 -Iinclude -Itests/include -Iexternal/psudb-common/cpp/include
 
 #include "shard/ISAMTree.h"
 #include "query/rangequery.h"
+#include "psu-util/timer.h"
 #include "testing.h"
 
 #include <cassert>
