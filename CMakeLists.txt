@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
- set(CMAKE_C_COMPILER gcc)
-set(CMAKE_CXX_COMPILER g++)
+ set(CMAKE_C_COMPILER clang-19)
+set(CMAKE_CXX_COMPILER clang++-19)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -21,9 +21,9 @@ set(CMAKE_CXX_FLAGS=-latomic -mcx16)
 add_compile_options(-Wno-dev -Iinclude -Iexternal/PLEX/include -Iexternal -mcx16 -march=native) # -fconcepts-diagnostics-depth=3)
 add_definitions(-w)
 
-find_package(OpenMP REQUIRED)
-add_compile_options(${OpenMP_CXX_FLAGS})
-link_libraries(OpenMP::OpenMP_CXX)
+# find_package(OpenMP REQUIRED)
+# add_compile_options(${OpenMP_CXX_FLAGS})
+# link_libraries(OpenMP::OpenMP_CXX)
 
 if (BSD) 
     add_link_options(-L/usr/local/lib)
@@ -62,6 +62,11 @@ if (tests)
     target_link_libraries(checkpoint_tests PUBLIC gsl check subunit pthread atomic)
     target_link_options(checkpoint_tests PUBLIC -mcx16)
     target_include_directories(checkpoint_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
+
+    add_executable(de_benchmark_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/de_benchmark_tests.cpp)
+    target_link_libraries(de_benchmark_tests PUBLIC gsl check subunit pthread atomic)
+    target_link_options(de_benchmark_tests PUBLIC -mcx16)
+    target_include_directories(de_benchmark_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
 
     # add_executable(internal_level_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/internal_level_tests.cpp)
     # target_link_libraries(internal_level_tests PUBLIC gsl check subunit  pthread atomic)

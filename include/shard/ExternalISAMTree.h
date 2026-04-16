@@ -44,7 +44,7 @@ namespace de
     typedef decltype(R::value) V;
     typedef uint32_t PageNum;
 
-    constexpr static size_t NODE_SZ = 256;
+    constexpr static size_t NODE_SZ = 4096;
     constexpr static size_t INTERNAL_FANOUT =
         NODE_SZ / (sizeof(K) + sizeof(PageNum));
 
@@ -189,7 +189,7 @@ namespace de
 
     Wrapped<R> *point_lookup(const R &rec, bool filter = false, std::byte *buffer = nullptr)
     {
-      if (filter && !m_bf->lookup(rec))
+      if ((filter && !m_bf->lookup(rec)) || buffer == nullptr)
         return nullptr;
 
       size_t offset = get_lower_bound(rec.key);
@@ -198,11 +198,9 @@ namespace de
         return nullptr;
 
       PageNum page = offset / NODE_SZ;
-      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
 
       if (pread(m_isam_fd, buffer, NODE_SZ, page * NODE_SZ) < 0)
       {
-        free(buffer);
         throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in point_lookup");
       }
 
@@ -336,12 +334,12 @@ namespace de
 
     const Wrapped<R> *get_record_at(size_t idx, std::byte *buffer = nullptr) const
     {
+      if (buffer == nullptr)
+        return nullptr;
       PageNum page_num = idx / LEAF_FANOUT + 1;
 
       if (page_num > m_root_page)
         return nullptr;
-
-      psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
 
       size_t bytes = pread(m_isam_fd, buffer, NODE_SZ, page_num * NODE_SZ);
 

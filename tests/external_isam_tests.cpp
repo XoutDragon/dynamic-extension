@@ -2,12 +2,11 @@
 clang++ -std=c++20 -Iinclude -Itests/include -Iexternal/psudb-common/cpp/include tests/external_isam_tests.cpp -Iexternal/stduuid/include -o bin/external_isam_tests -lgsl -lgslcblas -latomic -ggdb -lcheck -lsubunit
 */
 
-#include <iostream>
+#include <dirent.h>
 #include <vector>
 
 #include "shard/ExternalISAMTree.h"
 #include "query/pointlookup.h"
-#include "psu-util/timer.h"
 #include "testing.h"
 
 #include <cassert>
@@ -18,6 +17,29 @@ using namespace de;
 typedef Rec R;
 typedef ISAMTree<R> Shard;
 typedef pl::Query<Shard> Q;
+
+#define SHARD_DIR "shards/"
+#define TEMP_SHARD_DIR "tmp_shards/"
+#define CHECKPOINT_PATH "checkpoint.json"
+
+void cleanup()
+{
+    DIR *dir = opendir(SHARD_DIR);
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (dir == NULL)
+            return;
+        std::string filename = std::string(SHARD_DIR) + entry->d_name;
+        remove(filename.c_str());
+    }
+
+    rmdir(TEMP_SHARD_DIR);
+    rmdir(SHARD_DIR);
+    remove(CHECKPOINT_PATH);
+    remove(WAL_PATH);
+}
 
 START_TEST(t_mbuffer_init)
 {
@@ -141,6 +163,6 @@ int shard_unit_tests()
 int main()
 {
     int unit_failed = shard_unit_tests();
-
+    cleanup();
     return (unit_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
