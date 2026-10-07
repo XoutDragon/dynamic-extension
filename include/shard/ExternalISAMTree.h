@@ -175,7 +175,7 @@ namespace de
 
     ~ISAMTree()
     {
-      remove(get_filename().c_str());
+      remove((std::string(SHARD_DIR) + get_filename()).c_str());
       close(m_isam_fd);
       delete m_bf;
     }
