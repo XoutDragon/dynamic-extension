@@ -17,6 +17,7 @@
 #include <queue>
 #include <string>
 #include <sys/stat.h>
+#include <utility>
 #include <vector>
 
 #include "framework/ShardRequirements.h"
@@ -70,15 +71,57 @@ namespace de
 
       bool operator>(const HeapNode &rhs) const
       {
-        return record.rec.key > rhs.record.rec.key;
+        return rhs.record.rec < record.rec;
       }
     };
+
 
     static_assert(sizeof(InternalNode) == NODE_SZ, "node size does not match");
 
     constexpr static size_t LEAF_FANOUT = NODE_SZ / sizeof(Wrapped<R>);
 
   public:
+    struct Iterator
+    {
+      public:
+        Iterator(int fd, size_t start, size_t end)
+          : m_fd(fd), m_idx(start), m_end(end), m_page_num(0)
+        {
+            std::byte *raw = nullptr;
+            psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &raw);
+            m_page = std::unique_ptr<std::byte, decltype(&free)>(raw, &free);
+        }
+      
+        const Wrapped<R> *get_current()
+        {
+          if (m_idx >= m_end)
+            return nullptr;
+
+          PageNum page = m_idx / LEAF_FANOUT + 1;
+          if (page != m_page_num)
+          {
+            if (pread(m_fd, m_page.get(), NODE_SZ, page * NODE_SZ) <0)
+            {
+              perror("failed to read from ISAM file in Iterator");
+              return nullptr;
+            }
+            m_page_num = page;
+          }
+
+          auto *recs = reinterpret_cast<Wrapped<R> *>(m_page.get());
+          return &recs[m_idx % LEAF_FANOUT];
+        }
+
+        bool get_next() { return ++m_idx < m_end; }
+
+      private:
+        int m_fd;
+        size_t m_idx;
+        size_t m_end;
+        PageNum m_page_num;
+        std::unique_ptr<std::byte, decltype(&free)> m_page{nullptr, &free};
+    };
+    
     typedef R RECORD;
 
     ISAMTree(BufferView<R> buffer)
@@ -159,12 +202,16 @@ namespace de
       std::string file_path = std::string(SHARD_DIR) + filename;
       m_isam_fd = open(file_path.c_str(), O_RDONLY);
       if (m_isam_fd < 0)
-        throw std::system_error(errno, std::generic_category(), "failed to open ISAM file");
+      {
+        perror("failed to open ISAM file");
+      }
 
       ISAMTreeHeader header;
 
       if (pread(m_isam_fd, &header, sizeof(ISAMTreeHeader), 0) < sizeof(ISAMTreeHeader))
-        throw std::system_error(errno, std::generic_category(), "failed to read ISAM Header from ISAM file");
+      {
+        perror("failed to read ISAM Header from ISAM file");
+      }
 
       m_id = uuids::uuid(header.id);
       m_root_page = header.root_page;
@@ -201,7 +248,7 @@ namespace de
 
       if (pread(m_isam_fd, buffer, NODE_SZ, page * NODE_SZ) < 0)
       {
-        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in point_lookup");
+        perror("failed to read from ISAM file in point_lookup");
       }
 
       size_t page_offset = (offset % NODE_SZ) / sizeof(Wrapped<R>);
@@ -235,7 +282,7 @@ namespace de
         if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
         {
           free(buffer);
-          throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_lower_bound");
+          perror("failed to read from ISAM file in get_lower_bound");
         }
 
         InternalNode *node = (InternalNode *)buffer;
@@ -258,7 +305,7 @@ namespace de
       if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
       {
         free(buffer);
-        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_lower_bound");
+        perror("failed to read from ISAM file in get_lower_bound");
       }
 
       const Wrapped<R> *pos = reinterpret_cast<const Wrapped<R> *>(buffer);
@@ -289,7 +336,7 @@ namespace de
         if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
         {
           free(buffer);
-          throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_upper_bound");
+          perror("failed to read from ISAM file in get_upper_bound");
         }
 
         InternalNode *node = (InternalNode *)buffer;
@@ -312,7 +359,7 @@ namespace de
       if (pread(m_isam_fd, buffer, NODE_SZ, now * NODE_SZ) < 0)
       {
         free(buffer);
-        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_upper_bound");
+        perror("failed to read from ISAM file in get_upper_bound");
       }
 
       const Wrapped<R> *pos = reinterpret_cast<const Wrapped<R> *>(buffer);
@@ -344,7 +391,7 @@ namespace de
       size_t bytes = pread(m_isam_fd, buffer, NODE_SZ, page_num * NODE_SZ);
 
       if (bytes < 0)
-        throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file in get_record_at");
+        perror("failed to read from ISAM file in get_record_at");
 
       auto records = reinterpret_cast<Wrapped<R> *>(buffer);
       size_t idx_in_page = idx % LEAF_FANOUT;
@@ -353,6 +400,19 @@ namespace de
         return nullptr;
 
       return &records[idx_in_page];
+    }
+
+    
+    Iterator get_iterator(const K &lower) const
+    {
+      if (m_reccnt == 0)
+        return Iterator(m_isam_fd, 0, 0);
+
+      size_t offset = get_lower_bound(lower);
+      size_t page = offset / NODE_SZ;
+      size_t slot = (offset % NODE_SZ) / sizeof(Wrapped<R>);
+
+      return Iterator(m_isam_fd, (page - 1) * LEAF_FANOUT + slot, m_reccnt);
     }
 
   private:
@@ -383,12 +443,12 @@ namespace de
 
       if (mkdir(SHARD_DIR, 0755) < 0 && errno != EEXIST)
       {
-        throw std::system_error(errno, std::generic_category(), "failed to create shard directory");
+        perror("failed to create shard directory");
       }
 
       if (mkdir(TEMP_SHARD_DIR, 0755) < 0 && errno != EEXIST)
       {
-        throw std::system_error(errno, std::generic_category(), "failed to create shard directory");
+        perror("failed to create temporary shard directory");
       }
 
       std::string tmp_file_path = std::string(TEMP_SHARD_DIR) + shard_filename;
@@ -396,7 +456,7 @@ namespace de
       m_isam_fd = open(tmp_file_path.c_str(), O_CREAT | O_RDWR, 0644);
       if (m_isam_fd < 0)
       {
-        throw std::system_error(errno, std::generic_category(), "failed to create ISAM file");
+        perror("failed to create ISAM file");
       }
     }
 
@@ -408,7 +468,7 @@ namespace de
 
       if (mkdir(tmp_dir.c_str(), 0755) < 0 && errno != EEXIST)
       {
-        throw std::system_error(errno, std::generic_category(), "failed to create temporary directory for sorting");
+        perror("failed to create temporary directory for sorting");
       }
 
       for (size_t start = 0; start < m_reccnt; start += LEAF_FANOUT)
@@ -435,14 +495,15 @@ namespace de
         if (tmp_fd < 0)
         {
           free(chunk);
-          throw std::system_error(errno, std::generic_category(), "failed to create temporary file for sorted runs");
+          perror("failed to create temporary file for sorted runs");
+     
         }
 
         if (pwrite(tmp_fd, chunk, NODE_SZ, 0) < 0)
         {
           close(tmp_fd);
           free(chunk);
-          throw std::system_error(errno, std::generic_category(), "failed to write to temporary files for sorted runs");
+          perror("failed to write to temporary files for sorted runs");
         }
 
         remove(tmp_file.c_str());
@@ -480,7 +541,7 @@ namespace de
       for (size_t i = 0; i < run_fds.size(); i++)
       {
         if (pread(run_fds[i], buffers[i], NODE_SZ, shards ? NODE_SZ : 0) < 0)
-          throw std::system_error(errno, std::generic_category(), "failed to read from sorted runs");
+          perror("failed to read from sorted runs");
 
         auto recs = reinterpret_cast<Wrapped<R> *>(buffers[i]);
 
@@ -503,7 +564,7 @@ namespace de
         {
           if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0)
           {
-            throw std::system_error(errno, std::generic_category(), "failed to write to ISAM file during external merge sort");
+            perror("failed to write to ISAM file during external merge sort");
           }
 
           memset(page, 0, NODE_SZ);
@@ -519,7 +580,9 @@ namespace de
           {
             size_t page_num = insert_cnt[min.file_idx] / LEAF_FANOUT;
             if (pread(run_fds[min.file_idx], buffers[min.file_idx], NODE_SZ, (shards ? (page_num + 1) : page_num) * NODE_SZ) < 0)
-              throw std::system_error(errno, std::generic_category(), "failed to read from sorted runs");
+            {
+              perror("failed to read from sorted runs");
+            }
           }
 
           auto recs = reinterpret_cast<Wrapped<R> *>(buffers[min.file_idx]);
@@ -536,7 +599,7 @@ namespace de
       {
         if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0)
         {
-          throw std::system_error(errno, std::generic_category(), "failed to write last page to ISAM file during external merge sort");
+          perror("failed to write to ISAM file during external merge sort");
         }
       }
 
@@ -571,7 +634,7 @@ namespace de
           psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &buffer);
           if (pread(m_isam_fd, buffer, NODE_SZ, child_page * NODE_SZ) < 0)
           {
-            throw std::system_error(errno, std::generic_category(), "failed to read from ISAM file while building internal levels");
+            perror("failed to read from ISAM file while building internal levels");
           }
 
           size_t records_on_page = LEAF_FANOUT;
@@ -590,7 +653,7 @@ namespace de
 
         if (pwrite(m_isam_fd, node, NODE_SZ, write_page * NODE_SZ) < 0)
         {
-          throw std::system_error(errno, std::generic_category(), "failed to write internal node to ISAM file");
+          perror("failed to write to ISAM file while building internal levels");
         }
         free(node);
         write_page++;
@@ -609,7 +672,7 @@ namespace de
 
       if (pwrite(m_isam_fd, &header, sizeof(header), 0) < 0)
       {
-        throw std::runtime_error("failed to write ISAM tree header");
+        perror("failed to write ISAM tree header");
       }
     }
 

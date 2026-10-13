@@ -17,6 +17,7 @@
 #include "framework/scheduling/SerialScheduler.h"
 
 #include "framework/structure/ExtensionStructure.h"
+#include "framework/structure/RangeScanIterator.h"
 #include "framework/structure/MutableBuffer.h"
 
 #include "framework/scheduling/Epoch.h"
@@ -215,6 +216,19 @@ namespace de
     {
       return schedule_query(std::move(parms), buffer);
     }
+
+    typedef RangeScanIterator<DynamicExtension, ShardType> iter_t;
+
+    /**
+     *  Create an iterator over every record with a key in
+     *  [start.key, finish.key]. See RangeScanIterator.
+     */
+    iter_t range_scan(const RecordType &start, const RecordType &finish)
+    {
+      return iter_t(this, start, finish);
+    }
+
+    friend class RangeScanIterator<DynamicExtension, ShardType>;
 
     /**
      *  Determine the number of records (including tagged records and
