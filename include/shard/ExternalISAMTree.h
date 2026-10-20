@@ -36,6 +36,7 @@ using psudb::CACHELINE_SIZE;
 
 namespace de
 {
+  inline bool isam_keep_files = false;
 
   template <KVPInterface R>
   class ISAMTree
@@ -222,7 +223,8 @@ namespace de
 
     ~ISAMTree()
     {
-      remove((std::string(SHARD_DIR) + get_filename()).c_str());
+      if (!isam_keep_files)
+        remove((std::string(SHARD_DIR) + get_filename()).c_str());
       close(m_isam_fd);
       delete m_bf;
     }

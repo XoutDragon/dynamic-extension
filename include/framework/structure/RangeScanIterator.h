@@ -7,7 +7,6 @@
  * across the buffer and every shard of a DynamicExtension.
  * 
  * 
- * THIS CODE IS WRITTEN BY CLAUDE Im going to rewrite this
  */
 
 #pragma once
@@ -23,9 +22,6 @@
 #include "framework/interface/Record.h"
 
 namespace de
-
-
-
 {
 
   template <typename Extension, typename ShardType>

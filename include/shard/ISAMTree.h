@@ -15,11 +15,8 @@
 #include <cassert>
 #include <vector>
 
-#include "framework/ShardRequirements.h"
-
 #include "psu-ds/BloomFilter.h"
 #include "util/SortedMerge.h"
-#include "util/bf_config.h"
 
 using psudb::BloomFilter;
 using psudb::byte;
