@@ -25,13 +25,13 @@ add_definitions(-w)
 # add_compile_options(${OpenMP_CXX_FLAGS})
 # link_libraries(OpenMP::OpenMP_CXX)
 
-if (BSD) 
+if (BSD)
     add_link_options(-L/usr/local/lib)
     add_compile_options(-I/usr/local/include)
     set(CMAKE_CXX_EXTENSIONS)
 endif()
 
-if (debug) 
+if (debug)
     add_compile_options(-g -O0 -Wall)
     if (!BSD)
         add_compile_options(-fsanitize=address)
@@ -44,7 +44,7 @@ else()
 endif()
 
 # Test build instructions
-if (tests) 
+if (tests)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin/tests")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
 
@@ -52,21 +52,21 @@ if (tests)
     # target_link_libraries(external_isam_tests PUBLIC gsl check subunit pthread atomic)
     # target_link_options(external_isam_tests PUBLIC -mcx16)
     # target_include_directories(external_isam_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include tests/include)
-# 
+#
     # add_executable(write_ahead_logging_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/write_ahead_logging_tests.cpp)
     # target_link_libraries(write_ahead_logging_tests PUBLIC gsl check subunit pthread atomic)
     # target_link_options(write_ahead_logging_tests PUBLIC -mcx16)
     # target_include_directories(write_ahead_logging_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
-# 
+#
     # add_executable(checkpoint_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/checkpoint_tests.cpp)
     # target_link_libraries(checkpoint_tests PUBLIC gsl check subunit pthread atomic)
     # target_link_options(checkpoint_tests PUBLIC -mcx16)
     # target_include_directories(checkpoint_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
-# 
-    # add_executable(de_benchmark_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/de_benchmark_tests.cpp)
-    # target_link_libraries(de_benchmark_tests PUBLIC gsl check subunit pthread atomic)
-    # target_link_options(de_benchmark_tests PUBLIC -mcx16)
-    # target_include_directories(de_benchmark_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
+
+    add_executable(de_benchmark_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/de_benchmark_tests.cpp)
+    target_link_libraries(de_benchmark_tests PUBLIC gsl check subunit pthread atomic)
+    target_link_options(de_benchmark_tests PUBLIC -mcx16)
+    target_include_directories(de_benchmark_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
 
     add_executable(range_scan_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/range_scan_tests.cpp)
     target_link_libraries(range_scan_tests PUBLIC gsl check subunit pthread atomic)
@@ -104,7 +104,7 @@ if (tests)
     # # target_link_libraries(vptree_tests PUBLIC gsl check subunit  pthread atomic)
     # # target_link_options(vptree_tests PUBLIC -mcx16)
     # # target_include_directories(vptree_tests PRIVATE include external/vptree external/psudb-common/cpp/include external/json/include external/stduuid/include)
-    
+
     # add_executable(de_tier_tag ${CMAKE_CURRENT_SOURCE_DIR}/tests/de_tier_tag.cpp)
     # target_link_libraries(de_tier_tag PUBLIC gsl check subunit  pthread atomic)
     # target_link_options(de_tier_tag PUBLIC -mcx16)
@@ -162,8 +162,8 @@ if (tests)
     # target_compile_options(pgm_tests PUBLIC)
 
     # Triespline code doesn't build under OpenBSD due to ambiguous function call;
-    # this is likely a difference between gcc and clang, rather than an OS thing 
-    # if (NOT BSD) 
+    # this is likely a difference between gcc and clang, rather than an OS thing
+    # if (NOT BSD)
     #     add_executable(triespline_debug ${CMAKE_CURRENT_SOURCE_DIR}/tests/triespline_debug.cpp)
     #     target_link_libraries(triespline_debug PUBLIC gsl check subunit  pthread atomic)
     #     target_link_options(triespline_debug PUBLIC -mcx16)
@@ -252,7 +252,7 @@ if (vldb_bench)
     #target_include_directories(ts_mdsp_bench PRIVATE include external external/m-tree/cpp external/PGM-index/include external/PLEX/include benchmarks/include external/psudb-common/cpp/include)
     #target_link_options(ts_mdsp_bench PUBLIC -mcx16)
     #target_compile_options(ts_mdsp_bench PUBLIC)
-    
+
     add_executable(pgm_bench ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/vldb/pgm_bench.cpp)
     target_link_libraries(pgm_bench PUBLIC gsl pthread atomic gomp)
     target_include_directories(pgm_bench PRIVATE include external external/m-tree/cpp external/PGM-index/include external/PLEX/include benchmarks/include external/psudb-common/cpp/include external/json/include external/stduuid/include)
@@ -313,7 +313,7 @@ endif()
 
 
 
-if (bench) 
+if (bench)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin/benchmarks")
 
     add_executable(reconstruction_interference ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/reconstruction_interference.cpp)
@@ -349,7 +349,7 @@ if (bench)
     external/m-tree/cpp external/PGM-index/include external/PLEX/include benchmarks/include external/psudb-common/cpp/include external/hat-trie/include/tsl external/json/include external/stduuid/include)
     target_link_options(hat_trie PUBLIC -mcx16)
 
-    add_executable(cedar_trie ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/cedar_trie.cpp) 
+    add_executable(cedar_trie ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/cedar_trie.cpp)
     target_link_libraries(cedar_trie PUBLIC gsl pthread atomic)
     target_include_directories(cedar_trie PRIVATE include external external/m-tree/cpp external/PGM-index/include external/PLEX/include benchmarks/include external/psudb-common/cpp/include external/hat-trie/include/tsl external/json/include external/stduuid/include)
     target_link_options(cedar_trie PUBLIC -mcx16)
