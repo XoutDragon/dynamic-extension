@@ -34,7 +34,6 @@ using psudb::CACHELINE_SIZE;
 #define TEMP_SHARD_DIR "tmp_shards/"
 
 namespace de {
-inline bool isam_keep_files = false;
 
 template <KVPInterface R> class ISAMTree {
 private:
@@ -202,8 +201,6 @@ public:
   }
 
   ~ISAMTree() {
-    if (!isam_keep_files)
-      remove((std::string(SHARD_DIR) + get_filename()).c_str());
     close(m_isam_fd);
     delete m_bf;
   }

@@ -6,6 +6,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unordered_set>
 
 #include "framework/util/Configuration.h"
 #include "framework/structure/InternalLevel.h"
@@ -14,6 +15,7 @@
 #define CHECKPOINT_TMP_PATH "checkpoint_tmp.json"
 
 #define TEMP_SHARD_DIR "tmp_shards/"
+#define SHARD_DIR "shards/"
 
 namespace de
 {
@@ -75,6 +77,8 @@ namespace de
         nlohmann::json j = nlohmann::json::parse(content);
         close(fd);
 
+        std::unordered_set<std::string> listed;
+
         for (auto &[idx, shards] : j.items())
         {
             int level = std::stoi(idx);
@@ -84,13 +88,26 @@ namespace de
 
             levels[level] = std::make_shared<InternalLevel<ShardType, QueryType>>(level, shards.size());
 
-            for (auto &shard : shards)
+            for (auto &shard : shards) {
+                listed.insert(shard.get<std::string>());
                 levels[level]->append_shard(shard.get<std::string>());
+            }
         }
 
-        DIR *dir = opendir(TEMP_SHARD_DIR);
-        if (dir == NULL)
-            return;
+        DIR *dir = opendir(SHARD_DIR);
+        if (!dir == NULL) {
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL)
+            {
+                std::string name = entry->d_name;
+                if (name == "." || name ==".." || listed.count(name)) continue;
+                remove((std::string(SHARD_DIR) + name).c_str());
+            }
+            closedir(dir);
+        }
+
+        dir = opendir(TEMP_SHARD_DIR);
+        if (dir == NULL) return;
 
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL)
@@ -98,5 +115,6 @@ namespace de
             std::string tmp_file = std::string(TEMP_SHARD_DIR) + entry->d_name;
             remove(tmp_file.c_str());
         }
+        closedir(dir);
     }
 }
