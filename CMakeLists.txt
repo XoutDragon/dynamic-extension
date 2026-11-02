@@ -52,12 +52,12 @@ if (tests)
     # target_link_libraries(external_isam_tests PUBLIC gsl check subunit pthread atomic)
     # target_link_options(external_isam_tests PUBLIC -mcx16)
     # target_include_directories(external_isam_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include tests/include)
-#
-    # add_executable(write_ahead_logging_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/write_ahead_logging_tests.cpp)
-    # target_link_libraries(write_ahead_logging_tests PUBLIC gsl check subunit pthread atomic)
-    # target_link_options(write_ahead_logging_tests PUBLIC -mcx16)
-    # target_include_directories(write_ahead_logging_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
-#
+
+    add_executable(write_ahead_logging_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/write_ahead_logging_tests.cpp)
+    target_link_libraries(write_ahead_logging_tests PUBLIC gsl check subunit pthread atomic)
+    target_link_options(write_ahead_logging_tests PUBLIC -mcx16)
+    target_include_directories(write_ahead_logging_tests PRIVATE include external/psudb-common/cpp/include external/json/include external/stduuid/include)
+    
     # add_executable(checkpoint_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/checkpoint_tests.cpp)
     # target_link_libraries(checkpoint_tests PUBLIC gsl check subunit pthread atomic)
     # target_link_options(checkpoint_tests PUBLIC -mcx16)

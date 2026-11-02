@@ -13,6 +13,7 @@
 #pragma once
 
 #include <cassert>
+#include <cstddef>
 #include <fcntl.h>
 #include <queue>
 #include <string>
@@ -20,11 +21,9 @@
 #include <utility>
 #include <vector>
 
-#include "framework/ShardRequirements.h"
 
 #include "psu-ds/BloomFilter.h"
 #include "util/SortedMerge.h"
-#include "util/bf_config.h"
 #include "uuid.h"
 
 using psudb::BloomFilter;
@@ -504,22 +503,11 @@ private:
 
     size_t count = 0;
     PageNum curr_page = 1;
+    size_t cancelled = 0;
 
     while (!heap.empty()) {
       HeapNode min = heap.top();
       heap.pop();
-
-      if (count == LEAF_FANOUT) {
-        if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0) {
-          perror("failed to write to ISAM file during external merge sort");
-        }
-
-        memset(page, 0, NODE_SZ);
-        count = 0;
-        curr_page++;
-      }
-
-      page[count++] = min.record;
 
       if (remaining.empty() || remaining[min.file_idx] > 0) {
         if (insert_cnt[min.file_idx] % LEAF_FANOUT == 0) {
@@ -538,6 +526,47 @@ private:
 
         insert_cnt[min.file_idx]++;
       }
+
+      if (!heap.empty() && heap.top().record.rec == min.record.rec && heap.top().record.is_tombstone() != min.record.is_tombstone())
+      {
+        HeapNode other = heap.top();
+        heap.pop();
+
+        if (remaining.empty() || remaining[other.file_idx] > 0)
+        {
+          if (insert_cnt[other.file_idx] % LEAF_FANOUT == 0)
+          {
+            size_t page_num = insert_cnt[other.file_idx] / LEAF_FANOUT;
+            if (pread(run_fds[other.file_idx], buffers[other.file_idx], NODE_SZ,
+                (shards ? (page_num + 1) : page_num) * NODE_SZ) < 0) {
+                  perror("failed to read from sorted runs");
+            }
+          }
+
+          auto recs = reinterpret_cast<Wrapped<R>*>(buffers[other.file_idx]);
+
+          heap.push({recs[insert_cnt[other.file_idx] % LEAF_FANOUT], other.file_idx});
+          if (!remaining.empty()) remaining[other.file_idx]--;
+
+          insert_cnt[other.file_idx]++;
+        }
+
+        cancelled++;
+        continue;
+      }
+
+      if (count == LEAF_FANOUT)
+      {
+        if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0)
+        {
+          perror("failed to write to ISAM file during external merge sort");
+        }
+        memset(page, 0, NODE_SZ);
+        count = 0;
+        curr_page++;
+      }
+
+      page[count++] = min.record;
     }
 
     if (count > 0) {
@@ -546,10 +575,14 @@ private:
       }
     }
 
-    m_last_data_page = curr_page;
+    m_reccnt = m_reccnt - (2 * cancelled);
+    m_tombstone_cnt -= cancelled;
+
+    m_last_data_page = (m_reccnt > 0) ? curr_page : 0;
 
     for (auto buffer : buffers)
       free(buffer);
+    free(output_buffer);
   }
 
   void build_internal_levels(PageNum first_page, PageNum last_page) {
