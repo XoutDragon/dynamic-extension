@@ -83,10 +83,10 @@ namespace de
      */
     DynamicExtension(size_t buffer_low_watermark, size_t buffer_high_watermark,
                      size_t scale_factor, size_t memory_budget = 0,
-                     size_t thread_cnt = 16, bool skip_checkpoint = false)
+                     size_t thread_cnt = 16, bool skip_checkpoint = false, bool use_wal = true)
         : m_scale_factor(scale_factor), m_max_delete_prop(1),
           m_sched(memory_budget, thread_cnt),
-          m_buffer(new Buffer(buffer_low_watermark, buffer_high_watermark)),
+          m_buffer(new Buffer(buffer_low_watermark, buffer_high_watermark, use_wal)),
           m_core_cnt(thread_cnt), m_next_core(0), m_epoch_cnt(0)
     {
       if constexpr (L == LayoutPolicy::BSM)
@@ -421,6 +421,7 @@ namespace de
 
     SchedType m_sched;
     Buffer *m_buffer;
+    bool m_use_wal;
 
     size_t m_core_cnt;
     std::atomic<int> m_next_core;

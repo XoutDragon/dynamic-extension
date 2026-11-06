@@ -26,7 +26,6 @@
 #include "framework/interface/Record.h"
 #include "framework/structure/BufferView.h"
 #include "psu-ds/BloomFilter.h"
-#include "psu-util/alignment.h"
 #include "util/bf_config.h"
 #include "WriteAheadLogger.h"
 
@@ -46,25 +45,27 @@ namespace de
 
   public:
     MutableBuffer(size_t low_watermark, size_t high_watermark,
-                  size_t capacity = 0)
+                  size_t capacity = 0, bool use_wal = false)
         : m_lwm(low_watermark), m_hwm(high_watermark),
           m_cap((capacity == 0) ? 2 * high_watermark : capacity), m_tail(0),
           m_head({0, 0}), m_old_head({high_watermark, 0}),
           m_data(new Wrapped<R>[m_cap]()),
           m_tombstone_filter(
               new psudb::BloomFilter<R>(BF_FPR, m_hwm, BF_HASH_FUNCS)),
-          m_tscnt(0), m_old_tscnt(0), m_active_head_advance(false), m_wal(new WriteAheadLogger<R>())
+          m_tscnt(0), m_old_tscnt(0), m_active_head_advance(false), m_wal(new WriteAheadLogger<R>()), m_use_wal(use_wal)
     {
       assert(m_cap > m_hwm);
       assert(m_hwm >= m_lwm);
 
-      WriteAheadLogger<R>::build_buffer_from_log((void *)this);
+      if (m_use_wal)
+        WriteAheadLogger<R>::build_buffer_from_log((void *)this);
     }
 
     ~MutableBuffer()
     {
       delete[] m_data;
       delete m_tombstone_filter;
+      delete m_wal; 
     }
 
     int append(const R &rec, bool tombstone = false, bool logging = true)
@@ -85,7 +86,7 @@ namespace de
       //        as the ordering timestamp in the header anymore.
       size_t pos = tail % m_cap;
 
-      if (logging)
+      if (logging && m_use_wal)
         m_wal->append(wrec);
 
       m_data[pos] = wrec;
@@ -125,7 +126,8 @@ namespace de
 
     bool delete_record(const R &rec)
     {
-      m_wal->remove(rec);
+      if (m_use_wal)
+        m_wal->remove(rec);
       return get_buffer_view().delete_record(rec);
     }
 
@@ -177,7 +179,8 @@ namespace de
         return false;
       }
 
-      m_wal->flush_begin();
+      if (m_use_wal) 
+        m_wal->flush_begin();
 
       m_active_head_advance.store(true);
 
@@ -192,7 +195,8 @@ namespace de
 
       /* move the current head into the old head */
       m_old_head.store(cur_hd);
-      m_wal->flush_complete();
+      if (m_use_wal)
+        m_wal->flush_complete();
       m_active_head_advance.store(false);
       return true;
     }
@@ -326,6 +330,7 @@ namespace de
     }
 
     WriteAheadLogger<R> *m_wal;
+    bool m_use_wal;
 
     size_t m_lwm;
     size_t m_hwm;

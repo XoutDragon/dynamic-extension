@@ -5,8 +5,10 @@
 
 #pragma once
 
+#include <cstdio>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <system_error>
 #include <threads.h>
 #include <unistd.h>
 
