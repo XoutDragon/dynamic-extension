@@ -45,7 +45,7 @@ namespace de
 
   public:
     MutableBuffer(size_t low_watermark, size_t high_watermark,
-                  size_t capacity = 0, bool use_wal = false)
+                  size_t capacity = 0, bool use_wal = true)
         : m_lwm(low_watermark), m_hwm(high_watermark),
           m_cap((capacity == 0) ? 2 * high_watermark : capacity), m_tail(0),
           m_head({0, 0}), m_old_head({high_watermark, 0}),
