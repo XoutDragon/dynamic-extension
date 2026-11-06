@@ -234,6 +234,7 @@ namespace de
     size_t get_flush_seq() {
       auto epoch = get_active_epoch();
       auto flush_seq = epoch->get_structure()->get_flush_seq();
+      end_job(epoch);
 
       return flush_seq;
     }
