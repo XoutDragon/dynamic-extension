@@ -86,7 +86,7 @@ namespace de
                      size_t thread_cnt = 16, bool skip_checkpoint = false, bool use_wal = true)
         : m_scale_factor(scale_factor), m_max_delete_prop(1),
           m_sched(memory_budget, thread_cnt),
-          m_buffer(new Buffer(buffer_low_watermark, buffer_high_watermark, use_wal)),
+          m_buffer(new Buffer(buffer_low_watermark, buffer_high_watermark, 0, use_wal)),
           m_core_cnt(thread_cnt), m_next_core(0), m_epoch_cnt(0)
     {
       if constexpr (L == LayoutPolicy::BSM)
