@@ -21,9 +21,10 @@ namespace de
 {
     template <ShardInterface ShardType, QueryInterface<ShardType> QueryType,
               LayoutPolicy L = LayoutPolicy::TEIRING>
-    void save_checkpoint(std::vector<std::shared_ptr<InternalLevel<ShardType, QueryType>>> levels)
+    void save_checkpoint(std::vector<std::shared_ptr<InternalLevel<ShardType, QueryType>>> levels, size_t flush_seq)
     {
         nlohmann::json j;
+        j["flush_seq"] = flush_seq;
         for (size_t i = 0; i < levels.size(); i++)
         {
             nlohmann::json shards = nlohmann::json::array();
@@ -55,7 +56,7 @@ namespace de
 
     template <ShardInterface ShardType, QueryInterface<ShardType> QueryType,
               LayoutPolicy L = LayoutPolicy::TEIRING>
-    void load_checkpoint(std::vector<std::shared_ptr<InternalLevel<ShardType, QueryType>>> &levels)
+    void load_checkpoint(std::vector<std::shared_ptr<InternalLevel<ShardType, QueryType>>> &levels, size_t &flush_seq)
     {
 
         if (access(CHECKPOINT_PATH, F_OK) < 0)
@@ -77,10 +78,13 @@ namespace de
         nlohmann::json j = nlohmann::json::parse(content);
         close(fd);
 
+        flush_seq = j.value("flush_seq", (size_t) 0);
+
         std::unordered_set<std::string> listed;
 
         for (auto &[idx, shards] : j.items())
         {
+            if (idx == "flush_seq") continue;
             int level = std::stoi(idx);
 
             while (levels.size() <= level)

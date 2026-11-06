@@ -10,6 +10,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <vector>
 
@@ -46,12 +47,12 @@ namespace de
     ExtensionStructure(size_t buffer_size, size_t scale_factor,
                        double max_delete_prop, bool skip_checkpoint = false)
         : m_scale_factor(scale_factor), m_max_delete_prop(max_delete_prop),
-          m_buffer_size(buffer_size)
+          m_buffer_size(buffer_size), m_flush_seq(0)
     {
       if (skip_checkpoint)
         return;
 
-      load_checkpoint(m_levels);
+      load_checkpoint(m_levels, m_flush_seq);
 
       size_t shard_capacity = (L == LayoutPolicy::LEVELING) ? 1 : m_scale_factor;
 
@@ -92,6 +93,7 @@ namespace de
         new_struct->m_levels.push_back(m_levels[i]->clone());
       }
 
+      new_struct->m_flush_seq = m_flush_seq;
       new_struct->m_refcnt = 0;
       new_struct->m_current_state = m_current_state;
 
@@ -144,9 +146,15 @@ namespace de
       assert(can_reconstruct_with(0, buffer.get_record_count(), tmp));
       flush_buffer_into_l0(std::move(buffer));
 
-      save_checkpoint(m_levels);
+      m_flush_seq++;
+      save_checkpoint(m_levels, m_flush_seq);
 
       return true;
+    }
+
+    size_t get_flush_seq () 
+    {
+      return m_flush_seq;
     }
 
     /*
@@ -525,7 +533,7 @@ namespace de
             0, calc_level_record_capacity(task.target), 0, 1};
       }
 
-      save_checkpoint(m_levels);
+      save_checkpoint(m_levels, m_flush_seq);
       return;
     }
 
@@ -590,7 +598,7 @@ namespace de
       m_current_state[incoming_level] = {
           0, calc_level_record_capacity(incoming_level), 0, shard_capacity};
 
-      save_checkpoint(m_levels);
+      save_checkpoint(m_levels, m_flush_seq);
     }
 
     bool take_reference()
@@ -629,6 +637,7 @@ namespace de
     size_t m_buffer_size;
 
     std::atomic<size_t> m_refcnt;
+    size_t m_flush_seq;
 
     std::vector<std::shared_ptr<InternalLevel<ShardType, QueryType>>> m_levels;
 

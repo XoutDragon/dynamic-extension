@@ -228,7 +228,15 @@ namespace de
       return iter_t(this, start, finish);
     }
 
+
     friend class RangeScanIterator<DynamicExtension, ShardType>;
+
+    size_t get_flush_seq() {
+      auto epoch = get_active_epoch();
+      auto flush_seq = epoch->get_structure()->get_flush_seq();
+
+      return flush_seq;
+    }
 
     /**
      *  Determine the number of records (including tagged records and
