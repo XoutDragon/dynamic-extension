@@ -52,7 +52,7 @@ namespace de
           m_data(new Wrapped<R>[m_cap]()),
           m_tombstone_filter(
               new psudb::BloomFilter<R>(BF_FPR, m_hwm, BF_HASH_FUNCS)),
-          m_tscnt(0), m_old_tscnt(0), m_active_head_advance(false), m_wal(new WriteAheadLogger<R>()), m_use_wal(use_wal)
+          m_tscnt(0), m_old_tscnt(0), m_active_head_advance(false), m_wal( use_wal ? new WriteAheadLogger<R>() : nullptr), m_use_wal(use_wal)
     {
       assert(m_cap > m_hwm);
       assert(m_hwm >= m_lwm);

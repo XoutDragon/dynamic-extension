@@ -421,8 +421,6 @@ namespace de
 
     SchedType m_sched;
     Buffer *m_buffer;
-    bool m_use_wal;
-
     size_t m_core_cnt;
     std::atomic<int> m_next_core;
     std::atomic<size_t> m_epoch_cnt;
