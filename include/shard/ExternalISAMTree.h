@@ -379,20 +379,20 @@ private:
    * Move this to a more appropriate place later.
    */
   uuids::uuid generate_uuid() {
+  static std::mt19937 generator;
+  static pid_t seeded_pid = 0;
+
+  if (seeded_pid != getpid()) {
     std::random_device rd;
-    auto seed_data = std::array<int, std::mt19937::state_size>{};
-    std::generate(std::begin(seed_data), std::end(seed_data), std::ref(rd));
-    std::seed_seq seq(std::begin(seed_data), std::end(seed_data));
-    std::mt19937 generator(seq);
-    uuids::uuid_random_generator gen{generator};
+    std::array<int, std::mt19937::state_size> seed_data;
+    std::generate(seed_data.begin(), seed_data.end(), std::ref(rd));
+    std::seed_seq seq(seed_data.begin(), seed_data.end());
+    generator.seed(seq);
+    seeded_pid = getpid();
+  }
 
-    uuids::uuid const id = gen();
-    assert(!id.is_nil());
-    assert(id.as_bytes().size() == 16);
-    assert(id.version() == uuids::uuid_version::random_number_based);
-    assert(id.variant() == uuids::uuid_variant::rfc);
-
-    return id;
+  uuids::uuid_random_generator gen{generator};
+  return gen();
   }
 
   void initialize() {
