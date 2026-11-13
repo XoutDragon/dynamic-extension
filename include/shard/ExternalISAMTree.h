@@ -21,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-
 #include "psu-ds/BloomFilter.h"
 #include "util/SortedMerge.h"
 #include "uuid.h"
@@ -139,7 +138,15 @@ public:
     std::string tmp_file = std::string(TEMP_SHARD_DIR) + get_filename();
     std::string renamed_file = std::string(SHARD_DIR) + get_filename();
 
+    fsync(m_isam_fd);
+
     rename(tmp_file.c_str(), renamed_file.c_str());
+
+    int sfd = open(SHARD_DIR, O_RDONLY | O_DIRECTORY);
+    if (sfd >= 0) {
+      fsync(sfd);
+      close(sfd);
+    }
   }
 
   ISAMTree(std::vector<ISAMTree *> const &shards)
@@ -173,7 +180,15 @@ public:
     std::string tmp_file = std::string(TEMP_SHARD_DIR) + get_filename();
     std::string renamed_file = std::string(SHARD_DIR) + get_filename();
 
+    fsync(m_isam_fd);
+
     rename(tmp_file.c_str(), renamed_file.c_str());
+
+    int sfd = open(SHARD_DIR, O_RDONLY | O_DIRECTORY);
+    if (sfd >= 0) {
+      fsync(sfd);
+      close(sfd);
+    }
   }
 
   ISAMTree(std::string filename)
@@ -379,20 +394,20 @@ private:
    * Move this to a more appropriate place later.
    */
   uuids::uuid generate_uuid() {
-  static std::mt19937 generator;
-  static pid_t seeded_pid = 0;
+    static std::mt19937 generator;
+    static pid_t seeded_pid = 0;
 
-  if (seeded_pid != getpid()) {
-    std::random_device rd;
-    std::array<int, std::mt19937::state_size> seed_data;
-    std::generate(seed_data.begin(), seed_data.end(), std::ref(rd));
-    std::seed_seq seq(seed_data.begin(), seed_data.end());
-    generator.seed(seq);
-    seeded_pid = getpid();
-  }
+    if (seeded_pid != getpid()) {
+      std::random_device rd;
+      std::array<int, std::mt19937::state_size> seed_data;
+      std::generate(seed_data.begin(), seed_data.end(), std::ref(rd));
+      std::seed_seq seq(seed_data.begin(), seed_data.end());
+      generator.seed(seq);
+      seeded_pid = getpid();
+    }
 
-  uuids::uuid_random_generator gen{generator};
-  return gen();
+    uuids::uuid_random_generator gen{generator};
+    return gen();
   }
 
   void initialize() {
@@ -524,26 +539,26 @@ private:
         insert_cnt[min.file_idx]++;
       }
 
-      if (!heap.empty() && heap.top().record.rec == min.record.rec && heap.top().record.is_tombstone() != min.record.is_tombstone())
-      {
+      if (!heap.empty() && heap.top().record.rec == min.record.rec &&
+          heap.top().record.is_tombstone() != min.record.is_tombstone()) {
         HeapNode other = heap.top();
         heap.pop();
 
-        if (remaining.empty() || remaining[other.file_idx] > 0)
-        {
-          if (insert_cnt[other.file_idx] % LEAF_FANOUT == 0)
-          {
+        if (remaining.empty() || remaining[other.file_idx] > 0) {
+          if (insert_cnt[other.file_idx] % LEAF_FANOUT == 0) {
             size_t page_num = insert_cnt[other.file_idx] / LEAF_FANOUT;
             if (pread(run_fds[other.file_idx], buffers[other.file_idx], NODE_SZ,
-                (shards ? (page_num + 1) : page_num) * NODE_SZ) < 0) {
-                  perror("failed to read from sorted runs");
+                      (shards ? (page_num + 1) : page_num) * NODE_SZ) < 0) {
+              perror("failed to read from sorted runs");
             }
           }
 
-          auto recs = reinterpret_cast<Wrapped<R>*>(buffers[other.file_idx]);
+          auto recs = reinterpret_cast<Wrapped<R> *>(buffers[other.file_idx]);
 
-          heap.push({recs[insert_cnt[other.file_idx] % LEAF_FANOUT], other.file_idx});
-          if (!remaining.empty()) remaining[other.file_idx]--;
+          heap.push(
+              {recs[insert_cnt[other.file_idx] % LEAF_FANOUT], other.file_idx});
+          if (!remaining.empty())
+            remaining[other.file_idx]--;
 
           insert_cnt[other.file_idx]++;
         }
@@ -552,10 +567,8 @@ private:
         continue;
       }
 
-      if (count == LEAF_FANOUT)
-      {
-        if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0)
-        {
+      if (count == LEAF_FANOUT) {
+        if (pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ) < 0) {
           perror("failed to write to ISAM file during external merge sort");
         }
         memset(page, 0, NODE_SZ);
