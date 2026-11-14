@@ -84,7 +84,7 @@ template <ShardInterface ShardType, QueryInterface<ShardType> QueryType,
           LayoutPolicy L = LayoutPolicy::TEIRING>
 void load_checkpoint(
     std::vector<std::shared_ptr<InternalLevel<ShardType, QueryType>>> &levels,
-    size_t &flush_seq) {
+    size_t &flush_seq, size_t shard_cap = 1) {
 
   if (access(CHECKPOINT_PATH, F_OK) < 0)
     return;
@@ -119,7 +119,7 @@ void load_checkpoint(
       levels.emplace_back(nullptr);
 
     levels[level] = std::make_shared<InternalLevel<ShardType, QueryType>>(
-        level, shards.size());
+        level, std::max(shards.size(), shard_cap));
 
     for (auto &shard : shards) {
       listed.insert(shard.get<std::string>());
