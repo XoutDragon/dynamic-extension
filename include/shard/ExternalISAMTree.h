@@ -114,9 +114,6 @@ public:
         m_internal_node_cnt(0), m_deleted_cnt(0), m_alloc_size(0),
         m_last_data_page(0), m_isam_fd(-1) {
     m_id = generate_uuid();
-    m_reccnt = buffer.get_record_count();
-    m_tombstone_cnt = buffer.get_tombstone_count();
-
     initialize();
     std::vector<Wrapped<R>> recs;
     recs.reserve(buffer.get_record_count());
