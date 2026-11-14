@@ -18,10 +18,10 @@
 #include <queue>
 #include <string>
 #include <sys/stat.h>
-#include <utility>
 #include <vector>
 
 #include "psu-ds/BloomFilter.h"
+#include "psu-util/alignment.h"
 #include "util/SortedMerge.h"
 #include "uuid.h"
 
@@ -118,14 +118,49 @@ public:
     m_tombstone_cnt = buffer.get_tombstone_count();
 
     initialize();
+    std::vector<Wrapped<R>> recs;
+    recs.reserve(buffer.get_record_count());
+    for (size_t i = 0; i < buffer.get_record_count(); i++)
+      recs.push_back(*buffer.get(i));
+    std::sort(
+        recs.begin(), recs.end(),
+        [](const Wrapped<R> &a, const Wrapped<R> &b) { return a.rec < b.rec; });
 
-    std::vector<size_t> records_per_run;
-    for (size_t start = 0; start < m_reccnt; start += LEAF_FANOUT)
-      records_per_run.push_back(std::min(LEAF_FANOUT, m_reccnt - start));
+    std::byte *page = nullptr;
+    psudb::sf_aligned_alloc(NODE_SZ, NODE_SZ, &page);
+    memset(page, 0, NODE_SZ);
+    auto out = reinterpret_cast<Wrapped<R> *>(page);
 
-    std::vector<int> run_fds = create_sorted_runs(std::move(buffer));
-    external_merge_sort(run_fds, false, records_per_run);
-    cleanup_sorted_runs(run_fds);
+    size_t count = 0;
+    PageNum curr_page = 1;
+    m_reccnt = 0;
+    m_tombstone_cnt = 0;
+
+    for (size_t i = 0; i < recs.size(); i++) {
+      if (i + 1 < recs.size() && recs[i].rec == recs[i + 1].rec &&
+          recs[i].is_tombstone() != recs[i + 1].is_tombstone()) {
+        i++;
+        continue;
+      }
+
+      if (count == LEAF_FANOUT) {
+        pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ);
+        memset(page, 0, NODE_SZ);
+        count = 0;
+        curr_page++;
+      }
+
+      out[count++] = recs[i];
+      m_reccnt++;
+      if (recs[i].is_tombstone())
+        m_tombstone_cnt++;
+    }
+    m_last_data_page = (m_reccnt > 0) ? curr_page : 0;
+
+    if (count > 0)
+      pwrite(m_isam_fd, page, NODE_SZ, curr_page * NODE_SZ);
+
+    free(page);
 
     if (m_reccnt > 0) {
       build_internal_levels(1, m_last_data_page);
